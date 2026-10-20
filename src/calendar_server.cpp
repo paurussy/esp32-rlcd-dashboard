@@ -80,16 +80,26 @@ void calendarServerBegin(Calendar &calendar, time_t (*now)())
   server.on("/calendar", HTTP_POST, handlePost);
   server.on("/calendar", HTTP_GET, handleGet);
   server.onNotFound([] { server.send(404, "text/plain", "not found\n"); });
-  server.begin();
 
+  if (strlen(CALENDAR_TOKEN) == 0) {
+    Serial.println("[cal] CALENDAR_TOKEN is empty: anyone on the network can read and push events");
+  }
+}
+
+void calendarServerStart()
+{
+  server.begin();
   if (MDNS.begin(MDNS_HOSTNAME)) {
     MDNS.addService("http", "tcp", CALENDAR_HTTP_PORT);
   } else {
     Serial.println("[cal] mDNS failed to start");
   }
-  if (strlen(CALENDAR_TOKEN) == 0) {
-    Serial.println("[cal] CALENDAR_TOKEN is empty: anyone on the network can read and push events");
-  }
+}
+
+void calendarServerStop()
+{
+  MDNS.end();
+  server.stop();
 }
 
 bool calendarServerLoop()

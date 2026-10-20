@@ -15,9 +15,6 @@ bool wifiConnect(uint32_t timeoutMs);
 
 bool wifiConnected();
 
-// Asks the WiFi stack to reconnect without blocking.
-void wifiReconnect();
-
 // Disconnects and powers the radio down.
 void wifiOff();
 

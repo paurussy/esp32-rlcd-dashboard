@@ -100,11 +100,7 @@ bool Speaker::begin(uint32_t sampleRate, uint32_t toneHz, int volumePct)
   uint8_t id = 0;
   if (!readReg(REG_CHIP_ID1, id) || id != CHIP_ID1_ES8311) return false;
 
-  // MCLK must be running before the codec is configured
-  i2s.setPins(_pins.bclk, _pins.ws, _pins.dout, -1, _pins.mclk);
-  if (!i2s.begin(I2S_MODE_STD, _sampleRate, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO)) return false;
-  if (!initCodec()) return false;
-
+  // I2S (and its MCLK) and the codec are only brought up while a pattern plays
   if (xTaskCreate(taskMain, "speaker", 4096, this, 2, &_task) != pdPASS) return false;
   _present = true;
   return true;
@@ -113,6 +109,7 @@ bool Speaker::begin(uint32_t sampleRate, uint32_t toneHz, int volumePct)
 void Speaker::beep(BeepPattern pattern)
 {
   if (!_present) return;
+  _playing = true;  // Already busy for the caller, before the task wakes up (it may go to sleep)
   _stopRequested = true;  // Ends the current pattern; the task then picks up the new one
   xTaskNotify(_task, static_cast<uint32_t>(pattern), eSetValueWithOverwrite);
 }
@@ -157,6 +154,14 @@ void Speaker::play(BeepPattern pattern)
   const PatternSpec spec = patternSpec(pattern);
 
   _playing = true;
+  // MCLK must be running before the codec is configured
+  i2s.setPins(_pins.bclk, _pins.ws, _pins.dout, -1, _pins.mclk);
+  if (!i2s.begin(I2S_MODE_STD, _sampleRate, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO) || !initCodec()) {
+    Serial.println("[audio] Could not start I2S/codec");
+    i2s.end();
+    _playing = false;
+    return;
+  }
   digitalWrite(_pins.pa, HIGH);
   writeSilence(20);  // Let the amplifier settle
   for (int i = 0; i < spec.count && !_stopRequested; i++) {
@@ -165,6 +170,8 @@ void Speaker::play(BeepPattern pattern)
   }
   writeSilence(DMA_DRAIN_MS);
   digitalWrite(_pins.pa, LOW);
+  writeReg(0x00, 0x00);  // Codec off (reset/power-down) before MCLK stops
+  i2s.end();
   _playing = false;
 }
 

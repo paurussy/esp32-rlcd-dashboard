@@ -41,9 +41,22 @@ Pick the source with `source` in the `[outlook]` section of `config.ini`:
   Meetings without a subject are never merged.
 - Start/end (UTC), subject and location. Nothing else leaves the PC, and only
   to the board on your network.
-- The scheduled task (`install_task.ps1`) pushes the whole day every 15 minutes
-  and at sign-in. A meeting added or moved shows up on the board at the next run,
-  within 15 minutes.
+- The scheduled task (`install_task.ps1`) pushes the whole day every 15 minutes,
+  timed to the board's WiFi windows (see below). A meeting added or moved shows
+  up on the board at the next window, within 15 minutes.
+
+## When the board listens
+
+To save power the board keeps WiFi off and only listens in a window that opens
+at minute :59, :14, :29 and :44 and closes at :01, :16, :31 and :46
+(`WIFI_WINDOW_*` in the firmware's `config.h`; `WINDOW_*` at the top of the push
+code in `teams_bridge.py` must match). The scheduled task starts at :58:40, reads
+Outlook (~20 s) and waits for the window to open; the push is retried every
+`retry_every_s` until the board answers or the window is about to close. The
+board switches WiFi off right after receiving it.
+
+Run outside a window (e.g. testing by hand), the bridge tries once and the board
+will most likely not answer: run it at :58:40 or later, until :01.
 
 The board keeps the events in RAM, so it still beeps if the PC goes to sleep.
 After 35 minutes without a push (`CALENDAR_STALE_MIN`), the footer says so.
@@ -73,24 +86,23 @@ After 35 minutes without a push (`CALENDAR_STALE_MIN`), the footer says so.
    ```powershell
    python teams_bridge.py --once
    ```
-6. Schedule it every 15 minutes (and at sign-in), hidden:
+6. Schedule it every 15 minutes, aligned with the board's WiFi windows, hidden:
    ```powershell
    powershell -ExecutionPolicy Bypass -File install_task.ps1
    ```
-   `-IntervalMinutes 5` changes the period; if you raise it above ~30, raise
-   `CALENDAR_STALE_MIN` too. The task only runs while you are signed in, since
+   The task only runs while you are signed in, since
    Outlook is read from your session. Errors go to `teams_bridge.log` next to
    the script. To remove the task:
    `Unregister-ScheduledTask -TaskName "RLCD Teams calendar bridge"`.
 
    Running `python teams_bridge.py` without `--once` instead keeps it resident,
-   reading Outlook every `interval_s` and pushing on changes (at least every
-   `keepalive_s`).
+   reading Outlook shortly before each window (`read_lead_s`) and pushing.
 
 ## Testing without Outlook
 
 Push a hand-written day with `curl` (times are UTC epochs, fields are
-tab-separated):
+tab-separated). The board only answers during its WiFi window (:59-:01, :14-:16,
+:29-:31, :44-:46):
 
 ```sh
 now=$(date +%s); s=$((now + 6*60)); e=$((s + 30*60))
@@ -119,8 +131,10 @@ early, `S` start).
   `source = new`.
 - **`401 bad token`**: `token` in `config.ini` doesn't match `CALENDAR_TOKEN`.
 - **`Could not reach the board`**: the PC and the board must be on the same
-  network, the firmware must be built with `CALENDAR_ENABLED = true` (it can't
-  be combined with `LOW_POWER_MODE`), and a work VPN can block local traffic.
+  network, the firmware must be built with `CALENDAR_ENABLED = true`, the push
+  must happen inside the board's WiFi window (see above), and a work VPN can
+  block local traffic. If `rlcd-dashboard.local` doesn't resolve in time, set
+  `host` to the board's IP (give it a DHCP reservation in the router).
 - **Deleted meetings still show up** (new Outlook): Outlook hasn't refreshed its
   cached calendar yet; see the note above. The log tells when it last did.
 - **`... is missing for <python>`**: the dependencies are installed in another

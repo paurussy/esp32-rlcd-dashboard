@@ -3,7 +3,8 @@ teams_bridge.py - Pushes today's Outlook (Teams) meetings to the ESP32 dashboard
 --------------------------------------------------------------------------------
 Reads today's meetings on this PC, with no Azure app, OAuth or admin consent,
 and POSTs them to the board in the format described in src/calendar.h.
-install_task.ps1 runs it with --once every 15 minutes.
+install_task.ps1 runs it with --once at :59, :14, :29 and :44, when the board's
+WiFi window opens (the board keeps WiFi off the rest of the time).
 
 Sources ([outlook] source in config.ini):
   new      The new Outlook for Windows (default). Reads its offline cache, a
@@ -13,7 +14,7 @@ Sources ([outlook] source in config.ini):
 
 Usage:
     python teams_bridge.py --once       # Push once and exit (scheduled task)
-    python teams_bridge.py              # Run forever, every `interval_s` seconds
+    python teams_bridge.py              # Run forever, pushing in every WiFi window
     python teams_bridge.py --dry-run    # Print today's events, send nothing
 
 Settings live in config.ini next to this script (see config.example.ini).
@@ -387,8 +388,61 @@ def push(cfg: configparser.SectionProxy, body: str) -> None:
         method="POST",
         headers={"X-Token": cfg.get("token", ""), "Content-Type": "text/plain; charset=utf-8"},
     )
-    with urllib.request.urlopen(request, timeout=cfg.getint("timeout_s", 8)) as response:
+    with urllib.request.urlopen(request, timeout=cfg.getint("timeout_s", 4)) as response:
         log.info("Pushed to %s: %s", url, response.read().decode(errors="replace").strip())
+
+
+# The board only has WiFi on in short windows (WIFI_WINDOW_* in config.h): it opens
+# OPEN_BEFORE_MIN before each multiple of WINDOW_PERIOD_MIN (:59, :14, :29, :44)
+# and closes CLOSE_AFTER_MIN after it (:01, :16, :31, :46).
+WINDOW_PERIOD_MIN = 15
+OPEN_BEFORE_MIN = 1
+CLOSE_AFTER_MIN = 1
+CLOSE_MARGIN_S = 5  # Stop trying this long before the board closes
+
+
+def window_bounds(now: datetime) -> tuple[datetime, datetime]:
+    """Start and end of the window closest to `now` (the current one, else the next)."""
+    base = now.replace(minute=0, second=0, microsecond=0)
+    slots = [base + timedelta(minutes=m) for m in range(0, 61 + WINDOW_PERIOD_MIN, WINDOW_PERIOD_MIN)]
+    for slot in slots:
+        opens = slot - timedelta(minutes=OPEN_BEFORE_MIN)
+        closes = slot + timedelta(minutes=CLOSE_AFTER_MIN)
+        if now < closes:
+            return opens, closes
+    raise AssertionError("unreachable")
+
+
+def push_in_window(cfg: configparser.SectionProxy, body: str) -> bool:
+    """POST until the board answers or its WiFi window closes. True if it was delivered."""
+    retry_s = cfg.getint("retry_every_s", 5)
+    opens, closes = window_bounds(datetime.now())
+    deadline = closes - timedelta(seconds=CLOSE_MARGIN_S)
+
+    if 0 < (opens - datetime.now()).total_seconds() <= 60:  # Early by a few seconds
+        time.sleep((opens - datetime.now()).total_seconds())
+
+    if datetime.now() < opens:  # Manual run: the board is asleep, so one attempt only
+        log.warning("Outside the board's WiFi window (next one %s-%s): trying once",
+                    opens.strftime("%H:%M"), closes.strftime("%H:%M"))
+        try:
+            push(cfg, body)
+            return True
+        except (urllib.error.URLError, OSError) as e:
+            log.error("Could not reach the board: %s", e)
+            return False
+
+    last_error = None
+    while datetime.now() < deadline:
+        try:
+            push(cfg, body)
+            return True
+        except (urllib.error.URLError, OSError) as e:
+            last_error = e
+            time.sleep(retry_s)
+    log.error("Could not reach the board before its WiFi window closed at %s: %s",
+              closes.strftime("%H:%M:%S"), last_error)
+    return False
 
 
 # ============================================================
@@ -450,25 +504,24 @@ def main() -> None:
     setup_logging()
     config = load_config(required=True)
     cfg = config["esp32"]
-    interval = cfg.getint("interval_s", 60)
-    keepalive = cfg.getint("keepalive_s", 300)
 
-    last_events, last_push = None, 0.0
     while True:
+        if not args.once:  # Resident: wake up so that Outlook is read right when the window opens
+            opens, _ = window_bounds(datetime.now())
+            read_lead = timedelta(seconds=cfg.getint("read_lead_s", 40))  # Reading takes ~20 s
+            wait = (opens - read_lead - datetime.now()).total_seconds()
+            if wait > 0:
+                time.sleep(wait)
         try:
             events = read_today_events(config["outlook"])
-            # Push on any change, and now and then anyway so the board knows the PC is alive
-            if events != last_events or time.monotonic() - last_push >= keepalive:
-                push(cfg, build_body(events))
-                last_events, last_push = events, time.monotonic()
+            push_in_window(cfg, build_body(events))
         except BridgeError as e:
             log.error("%s", e)
-        except (urllib.error.URLError, OSError) as e:
-            log.error("Could not reach the board: %s", e)
 
         if args.once:
             return
-        time.sleep(interval)
+        _, closes = window_bounds(datetime.now())
+        time.sleep(max((closes - datetime.now()).total_seconds(), 0) + 1)  # Past the end of this window
 
 
 if __name__ == "__main__":

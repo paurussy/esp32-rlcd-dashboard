@@ -3,8 +3,8 @@
   -------------------------------------------------------------------------
   The ES8311 is configured over I2C as an I2S slave (16-bit stereo, MCLK =
   256 x fs); the ESP32 generates a sine tone. Patterns play in a background
-  task, so beep() returns immediately. The amplifier is only powered while a
-  pattern plays.
+  task, so beep() returns immediately. I2S, the codec and the amplifier are only
+  powered while a pattern plays.
 */
 #pragma once
 
@@ -27,7 +27,7 @@ class Speaker {
 public:
   Speaker(TwoWire &wire, uint8_t address, const SpeakerPins &pins);
 
-  // Detects and configures the codec, starts I2S and the playback task.
+  // Detects the codec and starts the playback task.
   bool begin(uint32_t sampleRate, uint32_t toneHz, int volumePct);
 
   // Starts a pattern, replacing the one playing (if any).

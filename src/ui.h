@@ -16,17 +16,14 @@
 struct DashboardState {
   // Network
   bool wifiConnected = false;
-  bool wifiSleeping = false;    // Radio intentionally off (low-power mode)
   int wifiRssi = -100;
   char ipAddress[16] = "";
-
-  // Display
-  bool showSeconds = true;      // False when refreshed only once per minute
 
   // Clock
   bool rtcPresent = false;
   bool timeSynced = false;      // Set from NTP at least once
   bool rtcTimeInvalid = false;  // RTC lost power and was never re-synced
+  time_t lastNtpSync = 0;       // Unix time of the last NTP sync, 0 if none
   DateTime now;
 
   // Environment

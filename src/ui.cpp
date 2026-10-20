@@ -91,20 +91,16 @@ void drawPageDots(U8G2 &g, int centerX, int centerY, int page, int count)
   }
 }
 
-// Layout: [wifi + status]          [page dots]          [% + battery]
+// Layout: [wifi, only when connected]   [page dots]   [% + battery]
 void drawHeader(U8G2 &g, const DashboardState &s)
 {
   g.setDrawColor(1);
   g.drawBox(0, 0, SCREEN_W, HEADER_H);
   g.setDrawColor(0);
 
-  drawWifiIcon(g, 8, 5, wifiBars(s));
+  if (s.wifiConnected) drawWifiIcon(g, 8, 5, wifiBars(s));
 
   g.setFont(u8g2_font_helvB12_tf);
-  if (!s.wifiConnected && !s.wifiSleeping) {
-    g.drawUTF8(34, 18, "No WiFi");
-  }
-
   char label[8];
   if (s.batteryPresent) snprintf(label, sizeof(label), "%d%%", s.batteryPercent);
   else                  strcpy(label, "USB");
@@ -128,19 +124,25 @@ void drawFooterText(U8G2 &g, const char *left, const char *right)
   g.drawUTF8(SCREEN_W - 6 - g.getUTF8Width(right), SCREEN_H - 5, right);
 }
 
+void formatHM(time_t t, char *out, size_t size);  // Defined with the calendar helpers
+
 void drawFooter(U8G2 &g, const DashboardState &s)
 {
-  char left[24];
-  if (s.wifiConnected)     snprintf(left, sizeof(left), "IP %s", s.ipAddress);
-  else if (s.wifiSleeping) strcpy(left, "low power");
-  else                     strcpy(left, "offline");
+  char left[32];
+  if (s.wifiConnected) {
+    snprintf(left, sizeof(left), "IP %s", s.ipAddress);
+  } else if (s.lastNtpSync > 0) {
+    char hm[8];
+    formatHM(s.lastNtpSync, hm, sizeof(hm));
+    snprintf(left, sizeof(left), "clock synced %s", hm);
+  } else {
+    strcpy(left, "clock not synced");
+  }
 
   char uptime[24];
   unsigned long hours = s.uptimeSec / 3600;
   unsigned long minutes = (s.uptimeSec / 60) % 60;
-  unsigned long seconds = s.uptimeSec % 60;
-  if (s.showSeconds) snprintf(uptime, sizeof(uptime), "uptime %02lu:%02lu:%02lu", hours, minutes, seconds);
-  else               snprintf(uptime, sizeof(uptime), "uptime %luh %02lum", hours, minutes);
+  snprintf(uptime, sizeof(uptime), "uptime %luh %02lum", hours, minutes);
   drawFooterText(g, left, uptime);
 }
 
@@ -164,46 +166,28 @@ int maxDigitWidth(U8G2 &g)
   return widest;
 }
 
-// Large HH:MM, optionally with small seconds on the right.
-// With seconds the colon blinks; without them it stays on (one refresh per minute).
+// Large HH:MM (the screen is only refreshed once per minute, so no seconds).
 void drawClock(U8G2 &g, const DashboardState &s, int top)
 {
-  const uint8_t *bigFont = u8g2_font_logisoso78_tn;
-  const uint8_t *smallFont = u8g2_font_logisoso24_tn;
-
-  g.setFont(bigFont);
+  g.setFont(u8g2_font_logisoso78_tn);
   int bigDigitW = maxDigitWidth(g);
   int colonW = g.getStrWidth(":");
   int baseY = top + g.getAscent();
-  g.setFont(smallFont);
-  int smallDigitW = maxDigitWidth(g);
 
-  int bigW = 4 * bigDigitW + colonW + 6;
-  int totalW = s.showSeconds ? bigW + 8 + 2 * smallDigitW : bigW;
+  int totalW = 4 * bigDigitW + colonW + 6;
   int x0 = (SCREEN_W - totalW) / 2;
 
-  char hh[4] = "--", mm[4] = "--", ss[4] = "--";
+  char hh[4] = "--", mm[4] = "--";
   if (s.rtcPresent) {
     snprintf(hh, sizeof(hh), "%02u", s.now.hour % 100);
     snprintf(mm, sizeof(mm), "%02u", s.now.minute % 100);
-    snprintf(ss, sizeof(ss), "%02u", s.now.second % 100);
   }
 
-  g.setFont(bigFont);
   drawDigit(g, x0, bigDigitW, baseY, hh[0]);
   drawDigit(g, x0 + bigDigitW, bigDigitW, baseY, hh[1]);
-  if (!s.showSeconds || !s.rtcPresent || s.now.second % 2 == 0) {
-    g.drawStr(x0 + 2 * bigDigitW + 3, baseY - 4, ":");
-  }
+  g.drawStr(x0 + 2 * bigDigitW + 3, baseY - 4, ":");
   drawDigit(g, x0 + 2 * bigDigitW + colonW + 6, bigDigitW, baseY, mm[0]);
   drawDigit(g, x0 + 3 * bigDigitW + colonW + 6, bigDigitW, baseY, mm[1]);
-
-  if (!s.showSeconds) return;
-
-  g.setFont(smallFont);
-  int secX = x0 + bigW + 8;
-  drawDigit(g, secX, smallDigitW, baseY, ss[0]);
-  drawDigit(g, secX + smallDigitW, smallDigitW, baseY, ss[1]);
 }
 
 void drawDate(U8G2 &g, const DashboardState &s, int baseY)
