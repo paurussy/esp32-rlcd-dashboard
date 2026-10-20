@@ -65,7 +65,6 @@ static bool windowServed = false;    // Calendar received in this window: don't 
 static uint32_t closeAtMs = 0;       // Pending close after a push (0 = none)
 
 static int lastMinute = -1;          // Minute of the last RTC reading handled
-static uint32_t lastHistoryMs = 0;
 static uint32_t lastClockPollMs = 0;
 
 static bool keyStableLevel = HIGH;
@@ -80,8 +79,6 @@ constexpr uint32_t CLOSE_DELAY_MS = 500;
 // ============================================================
 //                          HELPERS
 // ============================================================
-static constexpr uint32_t minutesToMs(uint32_t minutes) { return minutes * 60UL * 1000UL; }
-
 // Current Unix time, from the last RTC reading.
 static time_t nowEpoch() { return dateTimeToEpoch(currentTime); }
 
@@ -143,14 +140,6 @@ static void initRtc()
     rtc.write(compileDateTime());
     Serial.println("[rtc] Power was lost, using compile time");
   }
-}
-
-static void updateHistory(uint32_t now)
-{
-  if (now - lastHistoryMs < minutesToMs(HISTORY_INTERVAL_MIN)) return;
-
-  lastHistoryMs = now;
-  if (climateValid()) history.push(temperatureC, humidityPct);
 }
 
 // ============================================================
@@ -257,7 +246,6 @@ static DashboardState dashboardState()
   s.temperature = temperatureC;
   s.humidity = humidityPct;
   s.history = &history;
-  s.historyIntervalMin = HISTORY_INTERVAL_MIN;
 
   s.batteryPresent = battery.isPresent();
   s.batteryCharging = battery.isCharging();
@@ -418,8 +406,7 @@ void setup()
     wifiOff();
   }
 
-  if (climateValid()) history.push(temperatureC, humidityPct);
-  lastHistoryMs = millis();
+  if (climateValid()) history.add(temperatureC, humidityPct);
   lastMinute = currentTime.minute;
 
   printSummary();
@@ -451,7 +438,7 @@ static bool mustStayAwake()
 static void onMinute()
 {
   readSensors();
-  updateHistory(millis());  // millis() keeps counting during light sleep
+  if (climateValid()) history.add(temperatureC, humidityPct);
   if (CALENDAR_ENABLED) {
     checkCalendarAlerts();
     leaveCalendarWhenDone();
