@@ -8,7 +8,7 @@ Desk clock and indoor climate dashboard for the
 - Low power by design: one screen refresh per minute, CPU light sleep, no
   Bluetooth, WiFi on only in short windows (see [Power](#power))
 - Full date line
-- Temperature and humidity (SHTC3) with comfort labels, min/max and a ~22 h chart
+- Temperature and humidity (SHTC3) with comfort labels, min/max and a chart that always fills its width (1 min per point at first, then 5 min, up to 15 min per point for ~22 h)
 - Header with WiFi signal strength (only while connected), page dots and
   battery level; footer with IP (or last clock sync) and uptime
 - Daily Teams/Outlook calendar: the meeting in progress and the next ones, with a

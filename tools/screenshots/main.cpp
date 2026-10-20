@@ -186,8 +186,9 @@ bool writePng(const std::string &path, const OffscreenDisplay &display)
 void fillHistory(History &history, int samples, int endMinuteOfDay)
 {
   constexpr double PI = 3.14159265358979323846;
+  history.intervalMin = HISTORY_LEVELS_MIN[HISTORY_LEVELS - 1];
   for (int i = 0; i < samples; i++) {
-    int minute = endMinuteOfDay - (samples - 1 - i) * HISTORY_INTERVAL_MIN;
+    int minute = endMinuteOfDay - (samples - 1 - i) * static_cast<int>(history.intervalMin);
     double phase = 2 * PI * (minute - 17 * 60) / (24 * 60.0);
     double ripple = std::sin(i * 1.7) * 0.15;
     history.push(static_cast<float>(21.6 + 1.5 * std::cos(phase) + ripple),
@@ -202,7 +203,6 @@ DashboardState baseState(const History &history)
   s.timeSynced = true;
   s.sensorPresent = true;
   s.history = &history;
-  s.historyIntervalMin = HISTORY_INTERVAL_MIN;
   return s;
 }
 

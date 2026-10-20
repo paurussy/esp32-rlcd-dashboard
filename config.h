@@ -92,12 +92,14 @@ constexpr uint32_t NTP_RETRY_MIN  = 5;
 // example uses -4 with the chip always awake at full speed; with light sleep
 // and WiFi mostly off the board runs much cooler, so this is an estimate.
 // Tune it against a trusted thermometer: offset = reference - raw reading.
-constexpr float TEMP_OFFSET_C = -1.5f;
+constexpr float TEMP_OFFSET_C = -2.0f;
 
-// One chart sample every HISTORY_INTERVAL_MIN minutes.
-// HISTORY_SIZE points fill the chart (~2 px each): 88 x 15 min = 22 h.
-constexpr uint32_t HISTORY_INTERVAL_MIN = 15;
-constexpr int      HISTORY_SIZE         = 88;
+// The charts always fill their width. With HISTORY_SIZE points they start at one
+// point per minute and, whenever full, merge into the next resolution (each one
+// a multiple of the previous): 88 min, then 7 h, then 22 h, which then scrolls.
+constexpr int      HISTORY_SIZE = 88;
+constexpr int      HISTORY_LEVELS = 3;
+constexpr uint32_t HISTORY_LEVELS_MIN[HISTORY_LEVELS] = {1, 5, 15};
 
 // ============================================================
 //                          BATTERY

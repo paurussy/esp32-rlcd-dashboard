@@ -228,10 +228,11 @@ void drawSparkline(U8G2 &g, int x, int y, int w, int h, const float *data, int n
     hi = mid + minRange / 2;
   }
 
-  float step = static_cast<float>(w - 4) / (HISTORY_SIZE - 1);
+  // The points always span the full width
+  float step = n > 1 ? static_cast<float>(w - 4) / (n - 1) : 0;
   int prevX = 0, prevY = 0;
   for (int i = 0; i < n; i++) {
-    int px = x + w - 2 - static_cast<int>((n - 1 - i) * step);
+    int px = x + w - 2 - static_cast<int>((n - 1 - i) * step + 0.5f);
     int py = y + h - 4 - static_cast<int>((data[i] - lo) / (hi - lo) * (h - 8));
     if (i > 0) {
       g.drawLine(prevX, prevY, px, py);
@@ -334,7 +335,7 @@ void drawCard(U8G2 &g, int x, int y, int w, int h, Metric metric, const Dashboar
   else        snprintf(text, sizeof(text), "min %.0f%%  max %.0f%%", lo, hi);
   g.drawUTF8(x + 10, footY, text);
 
-  uint32_t spanMin = histCount * s.historyIntervalMin;
+  uint32_t spanMin = histCount * s.history->intervalMin;
   if (spanMin >= 60) snprintf(text, sizeof(text), "%lu h", static_cast<unsigned long>(spanMin / 60));
   else               snprintf(text, sizeof(text), "%lu min", static_cast<unsigned long>(spanMin));
   g.drawUTF8(x + w - 10 - g.getUTF8Width(text), footY, text);

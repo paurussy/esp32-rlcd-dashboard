@@ -31,7 +31,6 @@ struct DashboardState {
   float temperature = NAN;
   float humidity = NAN;
   const History *history = nullptr;
-  uint32_t historyIntervalMin = 15;
 
   // Power
   bool batteryPresent = false;
