@@ -1,5 +1,5 @@
 # Local credentials
-secrets.h
+/secrets.h
 
 # Build output
 build/
