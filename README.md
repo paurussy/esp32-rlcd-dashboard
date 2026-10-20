@@ -47,6 +47,19 @@ arduino-cli compile --upload -p <PORT> \
   --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,CDCOnBoot=cdc" .
 ```
 
+## Low-power mode
+
+Set `LOW_POWER_MODE = true` in `config.h` to run longer on battery:
+
+- The screen refreshes once per minute and the clock hides the seconds
+- The ESP32 light-sleeps between refreshes; the reflective LCD keeps the image
+  without power
+- WiFi stays off and is only switched on to re-sync the clock every
+  `NTP_RESYNC_MIN` minutes
+
+USB serial output is interrupted while the board sleeps, so keep it disabled
+while debugging.
+
 ## Hardware
 
 | Peripheral          | Interface | Pins / address                     |

@@ -88,7 +88,7 @@ void drawHeader(U8G2 &g, const DashboardState &s)
   drawWifiIcon(g, 8, 5, wifiBars(s));
 
   g.setFont(u8g2_font_helvB12_tf);
-  if (!s.wifiConnected) {
+  if (!s.wifiConnected && !s.wifiSleeping) {
     g.drawUTF8(34, 18, "No WiFi");
   }
 
@@ -111,14 +111,17 @@ void drawFooter(U8G2 &g, const DashboardState &s)
   g.setFont(u8g2_font_5x8_tf);
 
   char left[24];
-  if (s.wifiConnected) snprintf(left, sizeof(left), "IP %s", s.ipAddress);
-  else                 strcpy(left, "offline");
+  if (s.wifiConnected)     snprintf(left, sizeof(left), "IP %s", s.ipAddress);
+  else if (s.wifiSleeping) strcpy(left, "low power");
+  else                     strcpy(left, "offline");
   g.drawUTF8(6, SCREEN_H - 5, left);
 
   char uptime[24];
-  uint32_t t = s.uptimeSec;
-  snprintf(uptime, sizeof(uptime), "uptime %02lu:%02lu:%02lu", static_cast<unsigned long>(t / 3600),
-           static_cast<unsigned long>((t / 60) % 60), static_cast<unsigned long>(t % 60));
+  unsigned long hours = s.uptimeSec / 3600;
+  unsigned long minutes = (s.uptimeSec / 60) % 60;
+  unsigned long seconds = s.uptimeSec % 60;
+  if (s.showSeconds) snprintf(uptime, sizeof(uptime), "uptime %02lu:%02lu:%02lu", hours, minutes, seconds);
+  else               snprintf(uptime, sizeof(uptime), "uptime %luh %02lum", hours, minutes);
   g.drawUTF8(SCREEN_W - 6 - g.getUTF8Width(uptime), SCREEN_H - 5, uptime);
 }
 
@@ -142,7 +145,8 @@ int maxDigitWidth(U8G2 &g)
   return widest;
 }
 
-// Large HH:MM with small seconds on the right; the colon blinks every second.
+// Large HH:MM, optionally with small seconds on the right.
+// With seconds the colon blinks; without them it stays on (one refresh per minute).
 void drawClock(U8G2 &g, const DashboardState &s, int top)
 {
   const uint8_t *bigFont = u8g2_font_logisoso78_tn;
@@ -156,7 +160,7 @@ void drawClock(U8G2 &g, const DashboardState &s, int top)
   int smallDigitW = maxDigitWidth(g);
 
   int bigW = 4 * bigDigitW + colonW + 6;
-  int totalW = bigW + 8 + 2 * smallDigitW;
+  int totalW = s.showSeconds ? bigW + 8 + 2 * smallDigitW : bigW;
   int x0 = (SCREEN_W - totalW) / 2;
 
   char hh[4] = "--", mm[4] = "--", ss[4] = "--";
@@ -169,11 +173,13 @@ void drawClock(U8G2 &g, const DashboardState &s, int top)
   g.setFont(bigFont);
   drawDigit(g, x0, bigDigitW, baseY, hh[0]);
   drawDigit(g, x0 + bigDigitW, bigDigitW, baseY, hh[1]);
-  if (!s.rtcPresent || s.now.second % 2 == 0) {
+  if (!s.showSeconds || !s.rtcPresent || s.now.second % 2 == 0) {
     g.drawStr(x0 + 2 * bigDigitW + 3, baseY - 4, ":");
   }
   drawDigit(g, x0 + 2 * bigDigitW + colonW + 6, bigDigitW, baseY, mm[0]);
   drawDigit(g, x0 + 3 * bigDigitW + colonW + 6, bigDigitW, baseY, mm[1]);
+
+  if (!s.showSeconds) return;
 
   g.setFont(smallFont);
   int secX = x0 + bigW + 8;

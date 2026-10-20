@@ -84,6 +84,19 @@ constexpr float BATTERY_ABSENT_BELOW_V = 2.5f;  // Below this: USB power only
 constexpr float BATTERY_FULL_ABOVE_V   = 4.15f; // Above this: charging / charged
 
 // ============================================================
+//                          LOW POWER
+// ============================================================
+// When enabled:
+//   - The screen refreshes once per minute and seconds are hidden
+//   - The CPU light-sleeps between refreshes (the reflective LCD keeps the image)
+//   - WiFi is only switched on to re-sync the clock (see NTP_RESYNC_MIN)
+// Note: USB serial output is interrupted while the board sleeps.
+constexpr bool LOW_POWER_MODE = false;
+
+// Wake up slightly after the minute rolls over, so the RTC already shows it.
+constexpr uint32_t LOW_POWER_WAKE_MARGIN_MS = 200;
+
+// ============================================================
 //                          MAIN LOOP
 // ============================================================
 constexpr uint32_t LOOP_DELAY_MS = 20;

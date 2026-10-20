@@ -26,6 +26,10 @@ public:
 
   U8G2 &u8g2() { return _u8g2; }
 
+  // Latches the control pins (CS, DC, RST) so the panel keeps its image
+  // while the chip is in light sleep. Release them after waking up.
+  void holdPins(bool hold);
+
 private:
   int _sck;
   int _mosi;

@@ -18,6 +18,9 @@ bool wifiConnected();
 // Asks the WiFi stack to reconnect without blocking.
 void wifiReconnect();
 
+// Disconnects and powers the radio down.
+void wifiOff();
+
 // Fetches the current local time (TIMEZONE in config.h) from NTP.
 // Requires an active WiFi connection.
 bool ntpFetchLocalTime(DateTime &out, uint32_t timeoutMs);

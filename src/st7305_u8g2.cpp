@@ -1,5 +1,7 @@
 #include "st7305_u8g2.h"
 
+#include <driver/gpio.h>
+
 namespace {
 
 constexpr uint32_t SPI_CLOCK_HZ = 24000000;
@@ -99,6 +101,15 @@ bool ST7305_U8g2::begin(uint8_t tileBufHeight, const u8g2_cb_t *rotation)
   u8g2_InitDisplay(u);
   u8g2_SetPowerSave(u, 0);
   return true;
+}
+
+void ST7305_U8g2::holdPins(bool hold)
+{
+  for (int pin : {_cs, _dc, _rst}) {
+    gpio_num_t gpio = static_cast<gpio_num_t>(pin);
+    if (hold) gpio_hold_en(gpio);
+    else      gpio_hold_dis(gpio);
+  }
 }
 
 void ST7305_U8g2::hardwareReset()

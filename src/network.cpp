@@ -37,6 +37,12 @@ void wifiReconnect()
   }
 }
 
+void wifiOff()
+{
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+}
+
 bool ntpFetchLocalTime(DateTime &out, uint32_t timeoutMs)
 {
   if (!wifiConnected()) return false;
