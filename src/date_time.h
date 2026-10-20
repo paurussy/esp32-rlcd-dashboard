@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 struct DateTime {
   uint16_t year = 2000;
@@ -25,6 +26,21 @@ inline uint8_t dayOfWeek(int year, int month, int day)
     year--;
   }
   return (day + 13 * (month + 1) / 5 + year + year / 4 - year / 100 + year / 400 + 6) % 7;
+}
+
+// Seconds since the Unix epoch for a local date/time.
+// Uses the time zone set with setenv("TZ")/tzset().
+inline time_t dateTimeToEpoch(const DateTime &dt)
+{
+  struct tm t = {};
+  t.tm_year = dt.year - 1900;
+  t.tm_mon = dt.month - 1;
+  t.tm_mday = dt.day;
+  t.tm_hour = dt.hour;
+  t.tm_min = dt.minute;
+  t.tm_sec = dt.second;
+  t.tm_isdst = -1;  // Let mktime work out DST
+  return mktime(&t);
 }
 
 // Date/time at which the calling translation unit was compiled.

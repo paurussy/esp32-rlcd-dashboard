@@ -1,0 +1,4 @@
+# source = new: reads the new Outlook's IndexedDB (not on PyPI; pinned commit, no git needed)
+ccl_chromium_reader @ https://github.com/cclgroupltd/ccl_chromium_reader/archive/ef840de30221c4d65bc96d2f4d9057e9ef2f526d.zip
+# source = classic: Outlook COM automation
+pywin32>=306

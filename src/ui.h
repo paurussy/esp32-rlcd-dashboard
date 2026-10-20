@@ -1,14 +1,15 @@
 /*
-  ui.h - Dashboard rendering (header, clock, sensor cards, footer)
+  ui.h - Screen rendering: dashboard (clock, sensor cards) and calendar
   ----------------------------------------------------------------
   Depends only on U8g2 and never touches hardware: the sketch fills a
-  DashboardState and calls the ui*() functions.
+  DashboardState (and a CalendarView) and calls the ui*() functions.
 */
 #pragma once
 
 #include <U8g2lib.h>
 #include <math.h>
 
+#include "calendar.h"
 #include "date_time.h"
 #include "history.h"
 
@@ -41,7 +42,23 @@ struct DashboardState {
   int batteryPercent = 0;
 
   uint32_t uptimeSec = 0;
+
+  // Page indicator in the header (no dots with a single page)
+  int page = 0;
+  int pageCount = 1;
+};
+
+struct CalendarView {
+  time_t now = 0;                   // Unix time; formatted with the local time zone
+  const CalendarEvent *events[CALENDAR_VISIBLE_EVENTS] = {};  // Not finished yet, current first
+  int count = 0;
+  bool hasData = false;             // Received at least one push from the PC
+  time_t lastUpdate = 0;
+  bool stale = false;               // No push for CALENDAR_STALE_MIN minutes
 };
 
 void uiDrawSplash(U8G2 &g, const char *message);
 void uiDrawDashboard(U8G2 &g, const DashboardState &s);
+
+// Header and footer status come from `s`; the clock is not drawn.
+void uiDrawCalendar(U8G2 &g, const DashboardState &s, const CalendarView &c);

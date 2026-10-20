@@ -5,3 +5,4 @@
 
 #define WIFI_SSID     ""
 #define WIFI_PASSWORD ""
+#define CALENDAR_TOKEN ""
