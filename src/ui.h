@@ -13,6 +13,9 @@
 #include "date_time.h"
 #include "history.h"
 
+// Which sensor cards the dashboard shows; a single one gets the full width.
+enum class ChartView { Both, Temperature, Humidity };
+
 struct DashboardState {
   // Network
   bool wifiConnected = false;
@@ -31,6 +34,10 @@ struct DashboardState {
   float temperature = NAN;
   float humidity = NAN;
   const History *history = nullptr;
+  ChartView chartView = ChartView::Both;
+
+  // Meeting beeps silenced (icon in the header)
+  bool alertsMuted = false;
 
   // Power
   bool batteryPresent = false;

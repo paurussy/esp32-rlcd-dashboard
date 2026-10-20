@@ -293,6 +293,11 @@ int main(int argc, char **argv)
   running.uptimeSec = 22 * 3600 + 41 * 60 + 9;
   save("dashboard.png", running);
 
+  // BOOT on the dashboard: one chart gets the full width, the other reading moves to its title
+  running.chartView = ChartView::Temperature;
+  save("dashboard-temperature.png", running);
+  running.chartView = ChartView::Both;
+
   // First minutes after boot: USB power, clock never synced, chart still filling up
   History bootHistory;
   bootHistory.push(18.9f, 60.0f);
@@ -314,6 +319,16 @@ int main(int argc, char **argv)
   // Between meetings, and the PC has gone quiet: the next one is framed instead of inverted
   running.now = {2026, 10, 20, 10, 52, 0, 2};
   saveCalendar("calendar-next.png", running, calendarView(calendar, running.now));
+
+  // BOOT on the calendar: beeps muted (icon in the header; WiFi is on, as in a window)
+  running.now = {2026, 10, 20, 10, 27, 0, 2};
+  running.alertsMuted = true;
+  running.wifiConnected = true;
+  running.wifiRssi = -58;
+  saveCalendar("calendar-muted.png", running, calendarView(calendar, running.now));
+  running.alertsMuted = false;
+  running.wifiConnected = false;
+  running.now = {2026, 10, 20, 10, 52, 0, 2};
 
   // Before the PC bridge has pushed anything
   Calendar empty;

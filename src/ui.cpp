@@ -30,6 +30,16 @@ void drawWifiIcon(U8G2 &g, int x, int y, int bars)
   }
 }
 
+// Speaker crossed out: meeting beeps are muted. Drawn in the current color.
+void drawMutedIcon(U8G2 &g, int x, int y)
+{
+  g.drawBox(x, y + 4, 4, 6);
+  g.drawTriangle(x + 4, y + 4, x + 9, y, x + 9, y + 13);
+  g.drawTriangle(x + 4, y + 9, x + 9, y, x + 9, y + 13);
+  g.drawLine(x + 12, y + 4, x + 18, y + 10);
+  g.drawLine(x + 12, y + 10, x + 18, y + 4);
+}
+
 // Horizontal battery filled proportionally to `pct`, drawn in the current color.
 void drawBatteryIcon(U8G2 &g, int x, int y, int pct, bool bolt)
 {
@@ -91,7 +101,7 @@ void drawPageDots(U8G2 &g, int centerX, int centerY, int page, int count)
   }
 }
 
-// Layout: [wifi, only when connected]   [page dots]   [% + battery]
+// Layout: [wifi, only when connected] [muted, only when muted]   [page dots]   [% + battery]
 void drawHeader(U8G2 &g, const DashboardState &s)
 {
   g.setDrawColor(1);
@@ -99,6 +109,7 @@ void drawHeader(U8G2 &g, const DashboardState &s)
   g.setDrawColor(0);
 
   if (s.wifiConnected) drawWifiIcon(g, 8, 5, wifiBars(s));
+  if (s.alertsMuted) drawMutedIcon(g, s.wifiConnected ? 34 : 8, 5);
 
   g.setFont(u8g2_font_helvB12_tf);
   char label[8];
@@ -271,7 +282,10 @@ const char *comfortLabel(Metric metric, float v)
 }
 
 // Card with icon, comfort tag, large value, sparkline and min/max.
-void drawCard(U8G2 &g, int x, int y, int w, int h, Metric metric, const DashboardState &s)
+// `other` (optional) is the reading of the other metric, shown after the title
+// when this card is the only one on screen.
+void drawCard(U8G2 &g, int x, int y, int w, int h, Metric metric, const DashboardState &s,
+              const char *other = nullptr)
 {
   const bool isTemp = metric == Metric::Temperature;
   const float value = isTemp ? s.temperature : s.humidity;
@@ -290,7 +304,9 @@ void drawCard(U8G2 &g, int x, int y, int w, int h, Metric metric, const Dashboar
   if (isTemp) drawThermometerIcon(g, x + 9, y + 5);
   else        drawDropIcon(g, x + 9, y + 6);
   g.setFont(u8g2_font_helvB10_tf);
-  g.drawUTF8(x + 28, y + 19, isTemp ? "TEMP" : "HUMIDITY");
+  const char *title = isTemp ? "TEMP" : "HUMIDITY";
+  g.drawUTF8(x + 28, y + 19, title);
+  if (other) g.drawUTF8(x + 28 + g.getUTF8Width(title) + 14, y + 19, other);
 
   if (valid) {
     drawTag(g, x + w - 8, y + 6, comfortLabel(metric, value));
@@ -481,14 +497,26 @@ void drawCalendarMessage(U8G2 &g, int centerY, const char *title, const char *de
   g.drawUTF8((SCREEN_W - g.getUTF8Width(detail)) / 2, centerY + 22, detail);
 }
 
-void drawCalendarFooter(U8G2 &g, const CalendarView &c)
+void drawCalendarFooter(U8G2 &g, const DashboardState &s, const CalendarView &c)
 {
   char left[48], hm[8];
   formatHM(c.lastUpdate, hm, sizeof(hm));
   if (!c.hasData)    strcpy(left, "Waiting for the PC calendar bridge");
   else if (c.stale)  snprintf(left, sizeof(left), "No update from the PC since %s", hm);
   else               snprintf(left, sizeof(left), "Synced %s", hm);
-  drawFooterText(g, left, "KEY: switch screen");
+  drawFooterText(g, left, s.alertsMuted ? "KEY: screen  BOOT: unmute" : "KEY: screen  BOOT: mute");
+}
+
+// Reading of a metric for the title row of the other card: "Humidity 48%".
+void formatOther(Metric metric, const DashboardState &s, char *out, size_t size)
+{
+  if (metric == Metric::Temperature) {
+    if (s.sensorPresent && !isnan(s.humidity)) snprintf(out, size, "Humidity %.0f%%", s.humidity);
+    else                                       snprintf(out, size, "Humidity --");
+  } else {
+    if (s.sensorPresent && !isnan(s.temperature)) snprintf(out, size, "Temp %.1f\xC2\xB0""C", s.temperature);
+    else                                          snprintf(out, size, "Temp --");
+  }
 }
 
 }  // namespace
@@ -517,8 +545,15 @@ void uiDrawDashboard(U8G2 &g, const DashboardState &s)
   drawHeader(g, s);
   drawClock(g, s, 31);
   drawDate(g, s, 134);
-  drawCard(g, 6, 144, 190, 136, Metric::Temperature, s);
-  drawCard(g, 204, 144, 190, 136, Metric::Humidity, s);
+  if (s.chartView == ChartView::Both) {
+    drawCard(g, 6, 144, 190, 136, Metric::Temperature, s);
+    drawCard(g, 204, 144, 190, 136, Metric::Humidity, s);
+  } else {
+    const Metric metric = s.chartView == ChartView::Temperature ? Metric::Temperature : Metric::Humidity;
+    char other[24];
+    formatOther(metric, s, other, sizeof(other));
+    drawCard(g, 6, 144, 388, 136, metric, s, other);
+  }
   drawFooter(g, s);
   g.sendBuffer();
 }
@@ -540,6 +575,6 @@ void uiDrawCalendar(U8G2 &g, const DashboardState &s, const CalendarView &c)
     }
   }
 
-  drawCalendarFooter(g, c);
+  drawCalendarFooter(g, s, c);
   g.sendBuffer();
 }

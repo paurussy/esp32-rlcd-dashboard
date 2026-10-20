@@ -8,7 +8,8 @@
     - Temperature and humidity (SHTC3) with a ~22 h chart
     - Header with WiFi signal (only while connected) and battery level
     - Today's Teams/Outlook meetings pushed from a PC (tools/calendar-bridge),
-      with beeps 5 minutes before and at the start; KEY switches screens
+      with beeps 5 minutes before and at the start; KEY switches screens,
+      BOOT cycles the charts (dashboard) or mutes the beeps (calendar)
 
   Built to run on little power: the screen is redrawn once per minute (or on a
   KEY press), the CPU light-sleeps in between, Bluetooth is never started and
@@ -67,9 +68,47 @@ static uint32_t closeAtMs = 0;       // Pending close after a push (0 = none)
 static int lastMinute = -1;          // Minute of the last RTC reading handled
 static uint32_t lastClockPollMs = 0;
 
-static bool keyStableLevel = HIGH;
-static bool keyLastLevel = HIGH;
-static uint32_t keyChangedMs = 0;
+static ChartView chartView = ChartView::Both;
+static bool alertsMuted = false;     // Meeting beeps silenced with BOOT on the calendar screen
+static uint8_t mutedDay = 0;         // Day of the month it was muted: beeps come back on the next one
+
+// Active-low button with debounce.
+struct Button {
+  explicit Button(int pin) : pin(pin) {}
+
+  // Debounced press (falling edge).
+  bool pressed()
+  {
+    bool level = digitalRead(pin);
+    if (level != lastLevel) {
+      lastLevel = level;
+      changedMs = millis();
+    }
+    if (level == stableLevel || millis() - changedMs < BUTTON_DEBOUNCE_MS) return false;
+
+    stableLevel = level;
+    return level == LOW;
+  }
+
+  // Released and settled: safe to sleep (the wake-up on a low level would fire at once otherwise).
+  bool idle() const { return digitalRead(pin) == HIGH && stableLevel == HIGH; }
+
+  // Input with pull-up that also wakes the chip from light sleep.
+  void begin() const
+  {
+    pinMode(pin, INPUT_PULLUP);
+    gpio_wakeup_enable(static_cast<gpio_num_t>(pin), GPIO_INTR_LOW_LEVEL);
+    esp_sleep_enable_gpio_wakeup();
+  }
+
+  const int pin;
+  bool stableLevel = HIGH;
+  bool lastLevel = HIGH;
+  uint32_t changedMs = 0;
+};
+
+static Button keyButton(PIN_BUTTON_KEY);    // Switches screens
+static Button bootButton(PIN_BUTTON_BOOT);  // Per-screen action: chart view / mute
 
 // While awake with the radio on, the RTC is polled this often for the next minute
 constexpr uint32_t CLOCK_POLL_MS = 250;
@@ -246,6 +285,8 @@ static DashboardState dashboardState()
   s.temperature = temperatureC;
   s.humidity = humidityPct;
   s.history = &history;
+  s.chartView = chartView;
+  s.alertsMuted = alertsMuted;
 
   s.batteryPresent = battery.isPresent();
   s.batteryCharging = battery.isCharging();
@@ -285,9 +326,9 @@ static void checkCalendarAlerts()
   CalendarAlert alert = calendar.pollAlerts(nowEpoch(), &event);
   if (alert == CalendarAlert::None) return;
 
-  Serial.printf("[cal] %s: %s\n", alert == CalendarAlert::Early ? "Starting soon" : "Starting now",
-                event->subject);
-  speaker.beep(alert == CalendarAlert::Early ? BeepPattern::Early : BeepPattern::Start);
+  Serial.printf("[cal] %s: %s%s\n", alert == CalendarAlert::Early ? "Starting soon" : "Starting now",
+                event->subject, alertsMuted ? " (muted)" : "");
+  if (!alertsMuted) speaker.beep(alert == CalendarAlert::Early ? BeepPattern::Early : BeepPattern::Start);
   screen = Screen::Calendar;
 }
 
@@ -306,31 +347,29 @@ static void leaveCalendarWhenDone()
   lastUpcoming = upcoming;
 }
 
-// Debounced KEY press (falling edge).
-static bool keyPressed()
-{
-  bool level = digitalRead(PIN_BUTTON_KEY);
-  if (level != keyLastLevel) {
-    keyLastLevel = level;
-    keyChangedMs = millis();
-  }
-  if (level == keyStableLevel || millis() - keyChangedMs < BUTTON_DEBOUNCE_MS) return false;
-
-  keyStableLevel = level;
-  return level == LOW;
-}
-
-// Released and settled: safe to sleep (the wake-up on a low level would fire at once otherwise).
-static bool keyIdle()
-{
-  return digitalRead(PIN_BUTTON_KEY) == HIGH && keyStableLevel == HIGH;
-}
-
 // KEY silences a beep in progress; otherwise it switches screens.
 static void handleKey()
 {
   if (speaker.isPlaying()) speaker.stop();
   else screen = screen == Screen::Dashboard ? Screen::Calendar : Screen::Dashboard;
+}
+
+// BOOT: on the calendar it mutes/unmutes the meeting beeps (until the next day);
+// on the dashboard it cycles the charts: both, temperature only, humidity only.
+static void handleBoot()
+{
+  if (CALENDAR_ENABLED && screen == Screen::Calendar) {
+    alertsMuted = !alertsMuted;
+    mutedDay = currentTime.day;
+    if (alertsMuted && speaker.isPlaying()) speaker.stop();
+    Serial.printf("[cal] Beeps %s\n", alertsMuted ? "muted" : "on");
+    return;
+  }
+  switch (chartView) {
+    case ChartView::Both:        chartView = ChartView::Temperature; break;
+    case ChartView::Temperature: chartView = ChartView::Humidity;    break;
+    case ChartView::Humidity:    chartView = ChartView::Both;        break;
+  }
 }
 
 static void printSummary()
@@ -378,10 +417,9 @@ void setup()
   }
   initRtc();
   battery.begin();
+  bootButton.begin();
   if (CALENDAR_ENABLED) {
-    pinMode(PIN_BUTTON_KEY, INPUT_PULLUP);
-    gpio_wakeup_enable(static_cast<gpio_num_t>(PIN_BUTTON_KEY), GPIO_INTR_LOW_LEVEL);
-    esp_sleep_enable_gpio_wakeup();
+    keyButton.begin();
     if (!speaker.begin(AUDIO_SAMPLE_RATE, BEEP_FREQ_HZ, BEEP_VOLUME_PCT)) {
       Serial.println("[audio] ES8311 not detected");
     }
@@ -428,10 +466,11 @@ static esp_sleep_wakeup_cause_t sleepUntilNextMinute()
   return esp_sleep_get_wakeup_cause();
 }
 
-// Radio on, a beep playing or KEY still down: stay awake and poll.
+// Radio on, a beep playing or a button still down: stay awake and poll.
 static bool mustStayAwake()
 {
-  return windowOpen || speaker.isPlaying() || (CALENDAR_ENABLED && !keyIdle());
+  return windowOpen || speaker.isPlaying() || !bootButton.idle() ||
+         (CALENDAR_ENABLED && !keyButton.idle());
 }
 
 // New minute: refresh readings, alerts and the WiFi window.
@@ -439,6 +478,7 @@ static void onMinute()
 {
   readSensors();
   if (climateValid()) history.add(temperatureC, humidityPct);
+  if (alertsMuted && currentTime.day != mutedDay) alertsMuted = false;  // New day: beeps back on
   if (CALENDAR_ENABLED) {
     checkCalendarAlerts();
     leaveCalendarWhenDone();
@@ -453,8 +493,12 @@ void loop()
 
   if (!mustStayAwake()) timerWake = sleepUntilNextMinute() == ESP_SLEEP_WAKEUP_TIMER;
 
-  if (CALENDAR_ENABLED && keyPressed()) {
+  if (CALENDAR_ENABLED && keyButton.pressed()) {
     handleKey();
+    redraw = true;
+  }
+  if (bootButton.pressed()) {
+    handleBoot();
     redraw = true;
   }
 
