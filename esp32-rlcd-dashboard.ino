@@ -7,6 +7,7 @@
     - Date line
     - Temperature and humidity (SHTC3) with a ~22 h chart
     - Header with WiFi signal and battery level
+    - Optional low-power mode (LOW_POWER_MODE in config.h)
 
   All settings live in config.h; WiFi credentials go in secrets.h
   (copy secrets.example.h). See README.md for build instructions.
@@ -14,6 +15,7 @@
 
 #include <WiFi.h>
 #include <Wire.h>
+#include <esp_sleep.h>
 
 #include "config.h"
 #include "src/battery.h"
@@ -98,10 +100,51 @@ static void initRtc()
   }
 }
 
+static void updateHistory(uint32_t now)
+{
+  if (now - lastHistoryMs < minutesToMs(HISTORY_INTERVAL_MIN)) return;
+
+  lastHistoryMs = now;
+  if (climateValid()) history.push(temperatureC, humidityPct);
+}
+
+// Periodic NTP re-sync. In normal mode it never blocks waiting for WiFi;
+// in low-power mode the radio is switched on just for the sync.
+static void resyncTimeIfDue(uint32_t now)
+{
+  const uint32_t interval = minutesToMs(timeSynced ? NTP_RESYNC_MIN : NTP_RETRY_MIN);
+  if (!rtc.isPresent() || now - lastNtpAttemptMs < interval) return;
+
+  lastNtpAttemptMs = now;
+  if (LOW_POWER_MODE) {
+    if (wifiConnect(WIFI_CONNECT_TIMEOUT_MS)) syncTimeFromNtp();
+    wifiOff();
+  } else if (wifiConnected()) {
+    syncTimeFromNtp();
+  } else {
+    wifiReconnect();
+  }
+}
+
+// Light-sleeps until just after the next minute starts.
+static void sleepUntilNextMinute()
+{
+  rtc.read(currentTime);  // Fresh value: the cycle may have taken a few seconds
+  uint64_t sleepMs = (60 - currentTime.second) * 1000ULL + LOW_POWER_WAKE_MARGIN_MS;
+
+  Serial.flush();
+  lcd.holdPins(true);
+  esp_sleep_enable_timer_wakeup(sleepMs * 1000ULL);
+  esp_light_sleep_start();
+  lcd.holdPins(false);
+}
+
 static void drawDashboard()
 {
   DashboardState s;
 
+  s.showSeconds = !LOW_POWER_MODE;
+  s.wifiSleeping = LOW_POWER_MODE;
   s.wifiConnected = wifiConnected();
   if (s.wifiConnected) {
     s.wifiRssi = WiFi.RSSI();
@@ -168,6 +211,7 @@ void setup()
   } else {
     Serial.println("[wifi] Could not connect");
   }
+  if (LOW_POWER_MODE) wifiOff();
   lastNtpAttemptMs = millis();
 
   readSensors();
@@ -178,7 +222,20 @@ void setup()
   drawDashboard();
 }
 
-void loop()
+// Low-power mode: one full cycle per minute, sleeping in between.
+static void lowPowerLoop()
+{
+  sleepUntilNextMinute();
+
+  const uint32_t now = millis();  // millis() keeps counting during light sleep
+  readSensors();
+  updateHistory(now);
+  resyncTimeIfDue(now);
+  drawDashboard();
+}
+
+// Normal mode: refresh every second.
+static void normalLoop()
 {
   const uint32_t now = millis();
 
@@ -187,19 +244,14 @@ void loop()
     readSensors();
     drawDashboard();
   }
-
-  if (now - lastHistoryMs >= minutesToMs(HISTORY_INTERVAL_MIN)) {
-    lastHistoryMs = now;
-    if (climateValid()) history.push(temperatureC, humidityPct);
-  }
-
-  // Periodic NTP re-sync; never blocks waiting for WiFi
-  const uint32_t ntpInterval = minutesToMs(timeSynced ? NTP_RESYNC_MIN : NTP_RETRY_MIN);
-  if (rtc.isPresent() && now - lastNtpAttemptMs >= ntpInterval) {
-    lastNtpAttemptMs = now;
-    if (wifiConnected()) syncTimeFromNtp();
-    else                 wifiReconnect();
-  }
+  updateHistory(now);
+  resyncTimeIfDue(now);
 
   delay(LOOP_DELAY_MS);
+}
+
+void loop()
+{
+  if (LOW_POWER_MODE) lowPowerLoop();
+  else                normalLoop();
 }

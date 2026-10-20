@@ -15,8 +15,12 @@
 struct DashboardState {
   // Network
   bool wifiConnected = false;
+  bool wifiSleeping = false;    // Radio intentionally off (low-power mode)
   int wifiRssi = -100;
   char ipAddress[16] = "";
+
+  // Display
+  bool showSeconds = true;      // False when refreshed only once per minute
 
   // Clock
   bool rtcPresent = false;
