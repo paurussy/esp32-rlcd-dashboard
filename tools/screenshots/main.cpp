@@ -280,14 +280,12 @@ int main(int argc, char **argv)
     write(name);
   };
 
-  // Running for a day on battery, connected to WiFi
+  // Running for a day on battery. WiFi is off between windows: no WiFi icon
   History dayHistory;
   fillHistory(dayHistory, HISTORY_SIZE, 14 * 60 + 15);
   DashboardState running = baseState(dayHistory);
-  running.wifiConnected = true;
-  running.wifiRssi = -58;
-  snprintf(running.ipAddress, sizeof(running.ipAddress), "192.168.1.42");
   running.now = {2026, 10, 20, 14, 27, 36, 2};
+  running.lastNtpSync = dateTimeToEpoch({2026, 10, 20, 13, 59, 8, 2});
   running.temperature = 22.8f;
   running.humidity = 46.0f;
   running.batteryPresent = true;
@@ -295,7 +293,7 @@ int main(int argc, char **argv)
   running.uptimeSec = 22 * 3600 + 41 * 60 + 9;
   save("dashboard.png", running);
 
-  // First minutes after boot: USB power, no WiFi, chart still filling up
+  // First minutes after boot: USB power, clock never synced, chart still filling up
   History bootHistory;
   bootHistory.push(18.9f, 60.0f);
   bootHistory.push(19.1f, 59.0f);

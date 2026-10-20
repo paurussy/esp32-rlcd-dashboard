@@ -5,10 +5,12 @@ Desk clock and indoor climate dashboard for the
 (4.2" 400x300 reflective LCD).
 
 - Large clock from the on-board PCF85063 RTC, re-synced via NTP every hour
+- Low power by design: one screen refresh per minute, CPU light sleep, no
+  Bluetooth, WiFi on only in short windows (see [Power](#power))
 - Full date line
 - Temperature and humidity (SHTC3) with comfort labels, min/max and a ~22 h chart
-- Header with WiFi signal strength, page dots and battery level; footer with IP
-  and uptime
+- Header with WiFi signal strength (only while connected), page dots and
+  battery level; footer with IP (or last clock sync) and uptime
 - Daily Teams/Outlook calendar: the meeting in progress and the next ones, with a
   beep 5 minutes before each meeting and another when it starts. A small PC
   program feeds it from Outlook (see [Teams calendar](#teams-calendar))
@@ -18,9 +20,9 @@ Desk clock and indoor climate dashboard for the
 ![Calendar](docs/images/calendar.png)
 
 <details>
-<summary>Offline, right after boot</summary>
+<summary>Right after boot, clock not synced yet</summary>
 
-![Dashboard without WiFi](docs/images/dashboard-offline.png)
+![Dashboard right after boot](docs/images/dashboard-offline.png)
 
 </details>
 
@@ -101,25 +103,35 @@ classic app) and pushes today's meetings to the board over WiFi. See
   The PC program sends at most one meeting per name (the most recently modified).
 - Events are kept in RAM, so alerts still play if the PC goes away. The footer
   warns after `CALENDAR_STALE_MIN` minutes without news from the PC.
+- The board only listens during its [WiFi windows](#power), so the PC pushes
+  inside them (the scheduled task is aligned with them).
 - Set `CALENDAR_TOKEN` in `secrets.h`. The PC must send the same token.
-- Turned on with `CALENDAR_ENABLED` in `config.h`. It needs WiFi, so it can't be
-  combined with low-power mode: the build fails if both are enabled.
+- Turned on with `CALENDAR_ENABLED` in `config.h`.
 
-## Low-power mode
+## Power
 
-Set `LOW_POWER_MODE = true` (and `CALENDAR_ENABLED = false`) in `config.h`
-to run longer on battery:
+There is a single, efficient mode (no switch to turn it on):
 
-- The screen refreshes once per minute and the clock hides the seconds
-- The ESP32 light-sleeps between refreshes; the reflective LCD keeps the image
-  without power
-- WiFi stays off and is only switched on to re-sync the clock every
-  `NTP_RESYNC_MIN` minutes
-- No Teams calendar, speaker or KEY button (the build refuses
-  `CALENDAR_ENABLED` together with `LOW_POWER_MODE`)
+- **Screen**: redrawn once per minute, right after the minute changes (no
+  seconds on the clock), and immediately when KEY is pressed.
+- **CPU**: runs at 80 MHz (`CPU_FREQ_MHZ`) and light-sleeps between refreshes;
+  the reflective LCD keeps the image without power. KEY wakes it up.
+- **Bluetooth**: never started.
+- **WiFi**: off, except in a window that opens at minute :59, :14, :29 and :44
+  and closes at :01, :16, :31 and :46 (`WIFI_WINDOW_*` in `config.h`). In a
+  window the board connects, listens for the PC's calendar push and, if the
+  last sync is about an hour old, re-syncs the clock via NTP (the :59 window).
+  It switches WiFi off as soon as the calendar arrives. If a clock sync fails,
+  WiFi is switched on again just for it every `NTP_RETRY_MIN` (5) minutes,
+  also outside the windows, until it works. The WiFi icon only shows while
+  actually connected.
+- **Audio**: the speaker codec and I2S are only powered while a beep plays.
+- The temperature sensor, battery and chart are sampled once a minute. With the
+  board no longer running hot all the time, `TEMP_OFFSET_C` was lowered to
+  -1.5 as an estimate: **calibrate it** against a trusted thermometer.
 
-USB serial output is interrupted while the board sleeps, so keep it disabled
-while debugging.
+USB serial output is interrupted while the board sleeps, and so is the USB
+upload port (see Troubleshooting).
 
 ## Troubleshooting
 
@@ -130,9 +142,9 @@ A fatal error occurred: Could not open COM11, the port is busy or doesn't exist.
 (Cannot configure port, something went wrong. Original message: PermissionError(13, 'A device attached to the system is not functioning.', None, 31))
 ```
 
-Usually the board is running firmware built with `LOW_POWER_MODE = true`.
 The ESP32-S3 uses its native USB, which stops responding while the chip
-light-sleeps. Windows still lists the port, but it can't be opened.
+light-sleeps (which is most of the time). Windows still lists the port, but it
+can't be opened.
 
 To upload anyway, put the board into download mode by hand:
 
@@ -160,8 +172,8 @@ Also make sure no serial monitor (e.g. Arduino IDE) has the port open.
 
 - The SHTC3 sits close to the ESP32 and reads high; `TEMP_OFFSET_C` in
   `config.h` compensates for it. Calibrate it against a trusted thermometer.
-- The RTC is re-synced via NTP every `NTP_RESYNC_MIN` (60) minutes. After a
-  failed attempt it retries every `NTP_RETRY_MIN` (5) minutes.
+- The RTC is re-synced via NTP every `NTP_RESYNC_MIN` (60) minutes, in a WiFi
+  window. After a failed attempt it retries every `NTP_RETRY_MIN` (5) minutes.
 - If the RTC lost power and NTP is unreachable, the clock starts from the
   firmware build time and the date line shows a warning.
 

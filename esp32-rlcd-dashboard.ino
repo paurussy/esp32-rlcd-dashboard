@@ -6,10 +6,14 @@
     - Large clock from the PCF85063 RTC, kept in time via NTP
     - Date line
     - Temperature and humidity (SHTC3) with a ~22 h chart
-    - Header with WiFi signal and battery level
+    - Header with WiFi signal (only while connected) and battery level
     - Today's Teams/Outlook meetings pushed from a PC (tools/calendar-bridge),
       with beeps 5 minutes before and at the start; KEY switches screens
-    - Optional low-power mode (LOW_POWER_MODE in config.h)
+
+  Built to run on little power: the screen is redrawn once per minute (or on a
+  KEY press), the CPU light-sleeps in between, Bluetooth is never started and
+  WiFi is only on during short windows (see WIFI_WINDOW_PERIOD_MIN) to take the
+  calendar from the PC and, once an hour, to re-sync the clock.
 
   All settings live in config.h; WiFi credentials go in secrets.h
   (copy secrets.example.h). See README.md for build instructions.
@@ -52,18 +56,33 @@ static Screen screen = Screen::Dashboard;
 
 static bool rtcTimeInvalid = false;  // RTC lost power; showing compile time
 static bool timeSynced = false;      // NTP succeeded at least once
-static bool lastSyncOk = false;      // Last NTP attempt succeeded (else retry sooner)
+static time_t lastNtpEpoch = 0;      // When (RTC time) it last did
+static bool ntpFailed = false;       // Last attempt failed: retry every NTP_RETRY_MIN
+static time_t ntpAttemptEpoch = 0;   // When it was made
 
-static uint32_t lastSensorReadMs = 0;
+static bool windowOpen = false;      // WiFi up and listening for the PC
+static bool windowServed = false;    // Calendar received in this window: don't reopen
+static uint32_t closeAtMs = 0;       // Pending close after a push (0 = none)
+
+static int lastMinute = -1;          // Minute of the last RTC reading handled
 static uint32_t lastHistoryMs = 0;
-static uint32_t lastNtpAttemptMs = 0;
+static uint32_t lastClockPollMs = 0;
+
+static bool keyStableLevel = HIGH;
+static bool keyLastLevel = HIGH;
+static uint32_t keyChangedMs = 0;
+
+// While awake with the radio on, the RTC is polled this often for the next minute
+constexpr uint32_t CLOCK_POLL_MS = 250;
+// Lets the HTTP response of the push reach the PC before the radio goes off
+constexpr uint32_t CLOSE_DELAY_MS = 500;
 
 // ============================================================
 //                          HELPERS
 // ============================================================
 static constexpr uint32_t minutesToMs(uint32_t minutes) { return minutes * 60UL * 1000UL; }
 
-// Current Unix time, from the RTC reading taken once per second.
+// Current Unix time, from the last RTC reading.
 static time_t nowEpoch() { return dateTimeToEpoch(currentTime); }
 
 static bool climateValid()
@@ -82,6 +101,13 @@ static void readSensors()
   battery.update();
 }
 
+static void noteNtpAttempt(bool ok)
+{
+  ntpFailed = !ok;
+  ntpAttemptEpoch = nowEpoch();
+  if (!ok) Serial.printf("[ntp] Sync failed, retrying in %lu min\n", static_cast<unsigned long>(NTP_RETRY_MIN));
+}
+
 // Fetches the time from NTP and stores it in the RTC.
 static bool syncTimeFromNtp()
 {
@@ -90,12 +116,16 @@ static bool syncTimeFromNtp()
   DateTime t;
   if (!ntpFetchLocalTime(t, NTP_RESPONSE_TIMEOUT_MS)) {
     Serial.println("[ntp] No response from time server");
+    noteNtpAttempt(false);
     return false;
   }
 
   rtc.write(t);
+  currentTime = t;
+  lastNtpEpoch = nowEpoch();
   rtcTimeInvalid = false;
   timeSynced = true;
+  noteNtpAttempt(true);
   Serial.printf("[ntp] RTC set to %04u-%02u-%02u %02u:%02u:%02u\n",
                 t.year, t.month, t.day, t.hour, t.minute, t.second);
   return true;
@@ -123,46 +153,94 @@ static void updateHistory(uint32_t now)
   if (climateValid()) history.push(temperatureC, humidityPct);
 }
 
-// Periodic NTP re-sync: every NTP_RESYNC_MIN, or NTP_RETRY_MIN after a failure.
-// In normal mode it never blocks waiting for WiFi; in low-power mode the radio
-// is switched on just for the sync.
-static void resyncTimeIfDue(uint32_t now)
+// ============================================================
+//                         WIFI WINDOWS
+// ============================================================
+// True in the minutes of a window: the ones just before and after each
+// multiple of WIFI_WINDOW_PERIOD_MIN (:59 and :00, :14 and :15, ...).
+static bool windowActiveAt(uint8_t minute)
 {
-  const uint32_t interval = minutesToMs(lastSyncOk ? NTP_RESYNC_MIN : NTP_RETRY_MIN);
-  if (!rtc.isPresent() || now - lastNtpAttemptMs < interval) return;
+  return (minute + WIFI_WINDOW_OPEN_BEFORE_MIN) % WIFI_WINDOW_PERIOD_MIN <
+         WIFI_WINDOW_OPEN_BEFORE_MIN + WIFI_WINDOW_CLOSE_AFTER_MIN;
+}
 
-  lastNtpAttemptMs = now;
-  if (LOW_POWER_MODE) {
-    lastSyncOk = wifiConnect(WIFI_CONNECT_TIMEOUT_MS) && syncTimeFromNtp();
+// Whether the clock needs a sync in this window. Windows are a period apart, so
+// the one closest to the deadline counts: without the slack, a sync made at
+// :59:30 would not look due 59 minutes later.
+static bool ntpDue()
+{
+  if (!rtc.isPresent()) return false;
+  if (!timeSynced) return true;
+  const time_t elapsed = nowEpoch() - lastNtpEpoch;
+  return elapsed + static_cast<time_t>(WIFI_WINDOW_PERIOD_MIN * 30) >=
+         static_cast<time_t>(NTP_RESYNC_MIN * 60);
+}
+
+// A failed sync is retried every NTP_RETRY_MIN minutes, window or not.
+static bool ntpRetryDue()
+{
+  return rtc.isPresent() && ntpFailed &&
+         nowEpoch() - ntpAttemptEpoch >= static_cast<time_t>(NTP_RETRY_MIN * 60);
+}
+
+static void closeWindow()
+{
+  if (CALENDAR_ENABLED) calendarServerStop();
+  wifiOff();
+  windowOpen = false;
+  closeAtMs = 0;
+}
+
+// Brings WiFi up, starts listening for the PC and re-syncs the clock if due.
+static void openWindow()
+{
+  if (!CALENDAR_ENABLED && !ntpDue()) return;
+
+  if (!wifiConnect(WIFI_CONNECT_TIMEOUT_MS)) {
+    Serial.println("[wifi] Could not connect, trying again in the next window");
     wifiOff();
-  } else if (wifiConnected()) {
-    lastSyncOk = syncTimeFromNtp();
-  } else {
-    lastSyncOk = false;
-    wifiReconnect();
+    if (ntpDue()) noteNtpAttempt(false);
+    return;
   }
-  if (!lastSyncOk) Serial.printf("[ntp] Sync failed, retrying in %lu min\n", static_cast<unsigned long>(NTP_RETRY_MIN));
+  windowOpen = true;
+  if (CALENDAR_ENABLED) calendarServerStart();
+
+  if (ntpDue()) syncTimeFromNtp();
+  rtc.read(currentTime);
+  lastMinute = currentTime.minute;  // The connection may have taken a while
+
+  if (!CALENDAR_ENABLED) closeWindow();
 }
 
-// Light-sleeps until just after the next minute starts.
-static void sleepUntilNextMinute()
+// Radio on just long enough to retry a failed clock sync.
+static void retryNtpOnly()
 {
-  rtc.read(currentTime);  // Fresh value: the cycle may have taken a few seconds
-  uint64_t sleepMs = (60 - currentTime.second) * 1000ULL + LOW_POWER_WAKE_MARGIN_MS;
-
-  Serial.flush();
-  lcd.holdPins(true);
-  esp_sleep_enable_timer_wakeup(sleepMs * 1000ULL);
-  esp_light_sleep_start();
-  lcd.holdPins(false);
+  if (wifiConnect(WIFI_CONNECT_TIMEOUT_MS)) syncTimeFromNtp();
+  else noteNtpAttempt(false);
+  wifiOff();
+  rtc.read(currentTime);
+  lastMinute = currentTime.minute;
 }
 
+// Opens the window when it starts and closes it when it ends.
+static void manageWindow()
+{
+  if (!windowActiveAt(currentTime.minute)) {
+    windowServed = false;
+    if (windowOpen) closeWindow();
+    else if (ntpRetryDue()) retryNtpOnly();
+    return;
+  }
+  if (!windowOpen && !windowServed) openWindow();
+}
+
+// ============================================================
+//                       SCREENS AND KEYS
+// ============================================================
 static DashboardState dashboardState()
 {
   DashboardState s;
 
-  s.showSeconds = !LOW_POWER_MODE;
-  s.wifiSleeping = LOW_POWER_MODE;
   s.wifiConnected = wifiConnected();
   if (s.wifiConnected) {
     s.wifiRssi = WiFi.RSSI();
@@ -172,6 +250,7 @@ static DashboardState dashboardState()
   s.rtcPresent = rtc.isPresent();
   s.timeSynced = timeSynced;
   s.rtcTimeInvalid = rtcTimeInvalid;
+  s.lastNtpSync = timeSynced ? lastNtpEpoch : 0;
   s.now = currentTime;
 
   s.sensorPresent = climateSensor.isPresent();
@@ -242,19 +321,21 @@ static void leaveCalendarWhenDone()
 // Debounced KEY press (falling edge).
 static bool keyPressed()
 {
-  static bool stableLevel = HIGH;
-  static bool lastLevel = HIGH;
-  static uint32_t changedMs = 0;
-
   bool level = digitalRead(PIN_BUTTON_KEY);
-  if (level != lastLevel) {
-    lastLevel = level;
-    changedMs = millis();
+  if (level != keyLastLevel) {
+    keyLastLevel = level;
+    keyChangedMs = millis();
   }
-  if (level == stableLevel || millis() - changedMs < BUTTON_DEBOUNCE_MS) return false;
+  if (level == keyStableLevel || millis() - keyChangedMs < BUTTON_DEBOUNCE_MS) return false;
 
-  stableLevel = level;
+  keyStableLevel = level;
   return level == LOW;
+}
+
+// Released and settled: safe to sleep (the wake-up on a low level would fire at once otherwise).
+static bool keyIdle()
+{
+  return digitalRead(PIN_BUTTON_KEY) == HIGH && keyStableLevel == HIGH;
 }
 
 // KEY silences a beep in progress; otherwise it switches screens.
@@ -274,10 +355,11 @@ static void printSummary()
                 currentTime.year, currentTime.month, currentTime.day,
                 currentTime.hour, currentTime.minute, currentTime.second);
   Serial.printf("Battery : %.2f V (%d %%)\n", battery.voltage(), battery.percent());
-  Serial.printf("WiFi    : %s\n", wifiConnected() ? WiFi.localIP().toString().c_str() : "disconnected");
+  Serial.printf("WiFi    : %s\n", wifiConnected() ? WiFi.localIP().toString().c_str() : "off");
   if (CALENDAR_ENABLED) {
     Serial.printf("Speaker : %s\n", speaker.isPresent() ? "OK" : "missing");
-    Serial.printf("Calendar: http://%s.local/calendar\n", MDNS_HOSTNAME);
+    Serial.printf("Calendar: http://%s.local/calendar (WiFi windows every %lu min)\n", MDNS_HOSTNAME,
+                  static_cast<unsigned long>(WIFI_WINDOW_PERIOD_MIN));
   }
 }
 
@@ -286,6 +368,9 @@ static void printSummary()
 // ============================================================
 void setup()
 {
+  setCpuFrequencyMhz(CPU_FREQ_MHZ);
+  btStop();  // Bluetooth is never used
+
   Serial.begin(SERIAL_BAUD);
   delay(200);
 
@@ -307,6 +392,8 @@ void setup()
   battery.begin();
   if (CALENDAR_ENABLED) {
     pinMode(PIN_BUTTON_KEY, INPUT_PULLUP);
+    gpio_wakeup_enable(static_cast<gpio_num_t>(PIN_BUTTON_KEY), GPIO_INTR_LOW_LEVEL);
+    esp_sleep_enable_gpio_wakeup();
     if (!speaker.begin(AUDIO_SAMPLE_RATE, BEEP_FREQ_HZ, BEEP_VOLUME_PCT)) {
       Serial.println("[audio] ES8311 not detected");
     }
@@ -314,66 +401,101 @@ void setup()
 
   uiDrawSplash(lcd.u8g2(), "Syncing clock (NTP)...");
   if (wifiConnect(WIFI_CONNECT_TIMEOUT_MS)) {
-    lastSyncOk = syncTimeFromNtp();
+    syncTimeFromNtp();
   } else {
     Serial.println("[wifi] Could not connect");
+    rtc.read(currentTime);
+    noteNtpAttempt(false);
   }
-  if (LOW_POWER_MODE) wifiOff();
-  if (CALENDAR_ENABLED && wifiConfigured()) calendarServerBegin(calendar, nowEpoch);
-  lastNtpAttemptMs = millis();
-
   readSensors();
+  if (CALENDAR_ENABLED && wifiConfigured()) calendarServerBegin(calendar, nowEpoch);
+
+  // Booted inside a window: stay up for the PC. Otherwise radio off until the next one.
+  if (CALENDAR_ENABLED && wifiConnected() && windowActiveAt(currentTime.minute)) {
+    calendarServerStart();
+    windowOpen = true;
+  } else {
+    wifiOff();
+  }
+
   if (climateValid()) history.push(temperatureC, humidityPct);
-  lastSensorReadMs = lastHistoryMs = millis();
+  lastHistoryMs = millis();
+  lastMinute = currentTime.minute;
 
   printSummary();
   drawScreen();
   if (CALENDAR_ENABLED && BEEP_ON_BOOT) speaker.beep(BeepPattern::Test);
 }
 
-// Low-power mode: one full cycle per minute, sleeping in between.
-static void lowPowerLoop()
+// Light-sleeps until just after the next minute starts, or until KEY is pressed.
+static esp_sleep_wakeup_cause_t sleepUntilNextMinute()
 {
-  sleepUntilNextMinute();
+  rtc.read(currentTime);  // Fresh value: the cycle may have taken a few seconds
+  uint64_t sleepMs = (60 - currentTime.second) * 1000ULL + SLEEP_WAKE_MARGIN_MS;
 
-  const uint32_t now = millis();  // millis() keeps counting during light sleep
-  readSensors();
-  updateHistory(now);
-  resyncTimeIfDue(now);
-  drawScreen();
+  Serial.flush();
+  lcd.holdPins(true);
+  esp_sleep_enable_timer_wakeup(sleepMs * 1000ULL);
+  esp_light_sleep_start();
+  lcd.holdPins(false);
+  return esp_sleep_get_wakeup_cause();
 }
 
-// Normal mode: refresh every second, or right away on a key press or calendar push.
-static void normalLoop()
+// Radio on, a beep playing or KEY still down: stay awake and poll.
+static bool mustStayAwake()
 {
-  const uint32_t now = millis();
-  bool redraw = false;
+  return windowOpen || speaker.isPlaying() || (CALENDAR_ENABLED && !keyIdle());
+}
 
+// New minute: refresh readings, alerts and the WiFi window.
+static void onMinute()
+{
+  readSensors();
+  updateHistory(millis());  // millis() keeps counting during light sleep
   if (CALENDAR_ENABLED) {
-    if (calendarServerLoop()) redraw = true;
-    if (keyPressed()) {
-      handleKey();
-      redraw = true;
-    }
+    checkCalendarAlerts();
+    leaveCalendarWhenDone();
   }
-  if (now - lastSensorReadMs >= SENSOR_READ_INTERVAL_MS) {
-    lastSensorReadMs = now;
-    readSensors();
-    if (CALENDAR_ENABLED) {
-      checkCalendarAlerts();
-      leaveCalendarWhenDone();
-    }
-    redraw = true;
-  }
-  if (redraw) drawScreen();
-  updateHistory(now);
-  resyncTimeIfDue(now);
-
-  delay(LOOP_DELAY_MS);
+  manageWindow();
 }
 
 void loop()
 {
-  if (LOW_POWER_MODE) lowPowerLoop();
-  else                normalLoop();
+  bool redraw = false;
+  bool timerWake = false;
+
+  if (!mustStayAwake()) timerWake = sleepUntilNextMinute() == ESP_SLEEP_WAKEUP_TIMER;
+
+  if (CALENDAR_ENABLED && keyPressed()) {
+    handleKey();
+    redraw = true;
+  }
+
+  // A push ends the window shortly after; alerts that its events bring are not left to the next minute
+  if (windowOpen && CALENDAR_ENABLED && calendarServerLoop()) {
+    rtc.read(currentTime);
+    checkCalendarAlerts();
+    windowServed = true;
+    closeAtMs = millis() + CLOSE_DELAY_MS;
+    redraw = true;
+  }
+  if (closeAtMs != 0 && static_cast<int32_t>(millis() - closeAtMs) >= 0) {
+    closeWindow();
+    redraw = true;  // The WiFi icon goes away
+  }
+
+  const uint32_t now = millis();
+  if (timerWake || now - lastClockPollMs >= CLOCK_POLL_MS) {
+    lastClockPollMs = now;
+    rtc.read(currentTime);
+    // Light sleep timers are not exact: only act when the RTC really shows a new minute
+    if (currentTime.minute != lastMinute || (timerWake && !rtc.isPresent())) {
+      lastMinute = currentTime.minute;
+      onMinute();
+      redraw = true;
+    }
+  }
+
+  if (redraw) drawScreen();
+  if (mustStayAwake()) delay(LOOP_DELAY_MS);
 }
