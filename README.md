@@ -71,6 +71,29 @@ Set `LOW_POWER_MODE = true` in `config.h` to run longer on battery:
 USB serial output is interrupted while the board sleeps, so keep it disabled
 while debugging.
 
+## Troubleshooting
+
+### Upload fails with "Could not open COMx, the port is busy or doesn't exist"
+
+```
+A fatal error occurred: Could not open COM11, the port is busy or doesn't exist.
+(Cannot configure port, something went wrong. Original message: PermissionError(13, 'A device attached to the system is not functioning.', None, 31))
+```
+
+Usually the board is running firmware built with `LOW_POWER_MODE = true`.
+The ESP32-S3 uses its native USB, which stops responding while the chip
+light-sleeps. Windows still lists the port, but it can't be opened.
+
+To upload anyway, put the board into download mode by hand:
+
+1. Hold **BOOT**.
+2. Press and release **RESET** (or re-plug the USB cable).
+3. Release **BOOT** and upload again. The port number may change, so check it
+   with `arduino-cli board list`.
+4. Press **RESET** after uploading to start the sketch.
+
+Also make sure no serial monitor (e.g. Arduino IDE) has the port open.
+
 ## Hardware
 
 | Peripheral          | Interface | Pins / address                     |
