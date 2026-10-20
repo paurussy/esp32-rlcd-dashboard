@@ -1,16 +1,28 @@
-# Teams calendar bridge
+# Calendar bridge
 
 Small Windows program that reads today's meetings from Outlook on this PC and
 pushes them to the dashboard over the local network. Teams meetings live in the
-Outlook calendar, so they show up too.
+Outlook calendar, so they show up too. Setup, scheduling and the board's WiFi
+windows are described in the [pc/ README](../README.md).
 
 Everything is read locally: no Azure app registration, OAuth, admin consent or
 calendar publishing is needed, which matters with work (Microsoft 365) accounts
 where those are usually locked down.
 
 ```
-new Outlook  --offline cache (IndexedDB)--> teams_bridge.py --HTTP POST /calendar--> ESP32
+new Outlook  --offline cache (IndexedDB)--> calendar_bridge --HTTP POST /calendar--> ESP32
 classic Outlook --COM----------------------^
+```
+
+```
+calendar_bridge/
+├── cli.py                # Arguments, and the push loop
+├── events.py             # A meeting, and the body the board receives
+├── errors.py
+└── outlook/
+    ├── __init__.py       # Picks the source, drops duplicates
+    ├── new.py            # New Outlook: its IndexedDB offline cache
+    └── classic.py        # Classic Outlook: COM
 ```
 
 Pick the source with `source` in the `[outlook]` section of `config.ini`:
@@ -41,62 +53,27 @@ Pick the source with `source` in the `[outlook]` section of `config.ini`:
   Meetings without a subject are never merged.
 - Start/end (UTC), subject and location. Nothing else leaves the PC, and only
   to the board on your network.
-- The scheduled task (`install_task.ps1`) pushes the whole day every 15 minutes,
-  timed to the board's WiFi windows (see below). A meeting added or moved shows
-  up on the board at the next window, within 15 minutes.
+- The scheduled task pushes the whole day every 15 minutes, timed to the board's
+  WiFi windows. A meeting added or moved shows up on the board at the next
+  window, within 15 minutes.
 
-## When the board listens
+The scheduled task starts at :58:40, reads Outlook (~20 s) and waits for the
+window to open. The board keeps the events in RAM, so it still beeps if the PC
+goes to sleep. After 35 minutes without a push (`CALENDAR_STALE_MIN`), the footer
+says so.
 
-To save power the board keeps WiFi off and only listens in a window that opens
-at minute :59, :14, :29 and :44 and closes at :01, :16, :31 and :46
-(`WIFI_WINDOW_*` in the firmware's `config.h`; `WINDOW_*` at the top of the push
-code in `teams_bridge.py` must match). The scheduled task starts at :58:40, reads
-Outlook (~20 s) and waits for the window to open; the push is retried every
-`retry_every_s` until the board answers or the window is about to close. The
-board switches WiFi off right after receiving it.
+## Usage
 
-Run outside a window (e.g. testing by hand), the bridge tries once and the board
-will most likely not answer: run it at :58:40 or later, until :01.
+From the `pc/` folder:
 
-The board keeps the events in RAM, so it still beeps if the PC goes to sleep.
-After 35 minutes without a push (`CALENDAR_STALE_MIN`), the footer says so.
+```powershell
+python -m calendar_bridge --dry-run   # Print today's meetings, send nothing
+python -m calendar_bridge --once      # Push once and exit (what the scheduled task runs)
+python -m calendar_bridge             # Stay running, reading Outlook shortly before each window (read_lead_s)
+```
 
-## Setup
-
-1. Set a token in the firmware's `secrets.h` and flash the board:
-   ```c
-   #define CALENDAR_TOKEN "some-long-random-string"
-   ```
-2. Install Python 3.11+ and the dependencies. Use `python -m pip` so they go
-   into the same Python that runs the bridge (a bare `pip` may belong to
-   another one):
-   ```powershell
-   python -m pip install -r requirements.txt
-   ```
-3. Copy `config.example.ini` to `config.ini` and set the same `token`.
-   `host` defaults to `rlcd-dashboard.local`. If mDNS doesn't resolve on your
-   network, use the board's IP instead; the dashboard footer shows it.
-   If the new Outlook has several accounts (work and personal), set `mailbox`
-   to your work address so only those meetings are sent.
-4. Check that Outlook is read correctly:
-   ```powershell
-   python teams_bridge.py --dry-run
-   ```
-5. Push once and look at the board (KEY switches to the calendar):
-   ```powershell
-   python teams_bridge.py --once
-   ```
-6. Schedule it every 15 minutes, aligned with the board's WiFi windows, hidden:
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File install_task.ps1
-   ```
-   The task only runs while you are signed in, since
-   Outlook is read from your session. Errors go to `teams_bridge.log` next to
-   the script. To remove the task:
-   `Unregister-ScheduledTask -TaskName "RLCD Teams calendar bridge"`.
-
-   Running `python teams_bridge.py` without `--once` instead keeps it resident,
-   reading Outlook shortly before each window (`read_lead_s`) and pushing.
+Run `--once` at :58:40 or later, until :01: outside the board's window it tries
+once and the board will most likely not answer.
 
 ## Testing without Outlook
 
@@ -117,7 +94,7 @@ early, `S` start).
 
 ## Troubleshooting
 
-- **Wrong or no meetings**: run `python teams_bridge.py --dry-run --debug`. It
+- **Wrong or no meetings**: run `python -m calendar_bridge --dry-run --debug`. It
   lists every item of today and why it was kept or skipped (all-day, cancelled,
   declined, other mailbox).
   - New Outlook: make sure it is the app you actually use and that it is
@@ -129,14 +106,9 @@ early, `S` start).
 - **`Classic Outlook error ... Server execution failed`**: classic Outlook is
   not installed or has no profile. If you use the new Outlook, set
   `source = new`.
-- **`401 bad token`**: `token` in `config.ini` doesn't match `CALENDAR_TOKEN`.
-- **`Could not reach the board`**: the PC and the board must be on the same
-  network, the firmware must be built with `CALENDAR_ENABLED = true`, the push
-  must happen inside the board's WiFi window (see above), and a work VPN can
-  block local traffic. If `rlcd-dashboard.local` doesn't resolve in time, set
-  `host` to the board's IP (give it a DHCP reservation in the router).
 - **Deleted meetings still show up** (new Outlook): Outlook hasn't refreshed its
-  cached calendar yet; see the note above. The log tells when it last did.
-- **`... is missing for <python>`**: the dependencies are installed in another
-  Python. Run `python -m pip install -r requirements.txt`; `install_task.ps1`
-  checks this too.
+  cached calendar yet; see the note above. The log (`logs/calendar_bridge.log`)
+  tells when it last did.
+
+Connection problems (`401 bad token`, `Could not reach the board`) are covered in
+the [pc/ README](../README.md#troubleshooting).

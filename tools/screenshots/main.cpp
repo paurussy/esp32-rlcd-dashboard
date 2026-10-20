@@ -1,7 +1,7 @@
 /*
   main.cpp - Renders the screens on the host and saves them as PNG files
   ----------------------------------------------------------------------
-  Uses the real src/ui.cpp (and src/calendar.cpp for the meetings) with U8g2 drawing into an in-memory frame buffer,
+  Uses the real src/ui/ (and src/model/ for the meetings and tasks) with U8g2 drawing into an in-memory frame buffer,
   so the images match what the device shows pixel for pixel.
 
   Usage: screenshots <output-dir>
@@ -15,8 +15,9 @@
 #include <string>
 #include <vector>
 
-#include "calendar.h"
-#include "ui.h"
+#include "model/calendar.h"
+#include "model/tasks.h"
+#include "ui/ui.h"
 
 namespace {
 
@@ -233,6 +234,43 @@ void fillCalendar(Calendar &calendar, time_t receivedAt)
   if (calendar.update(body.c_str(), receivedAt) != 6) fprintf(stderr, "calendar parse failed\n");
 }
 
+// Pending tasks as the PC sends them: high priority first, then oldest first.
+void fillTasks(TaskList &tasks, time_t receivedAt)
+{
+  struct Item {
+    bool high;
+    const char *text;
+  };
+  const Item items[] = {
+    {true, "Send the invoice to the accountant"},
+    {true, "Call Ana about the contract"},
+    {false, "Buy milk and bread"},
+    {false, "Book the dentist"},
+    {false, "Renew the car insurance"},
+    {false, "Water the plants"},
+    {false, "Reply to the landlord about the flat"},
+  };
+
+  std::string body = "v1\t" + std::to_string(static_cast<long>(receivedAt)) + "\n";
+  uint32_t id = 1;
+  for (const Item &item : items) {
+    body += std::to_string(id++) + "\t" + (item.high ? "1" : "0") + "\t" + item.text + "\n";
+  }
+  if (tasks.update(body.c_str(), receivedAt) != 7) fprintf(stderr, "tasks parse failed\n");
+}
+
+TasksView tasksView(const TaskList &tasks, const DateTime &now, int selected)
+{
+  TasksView t;
+  t.now = dateTimeToEpoch(now);
+  t.list = &tasks;
+  t.selected = selected;
+  t.hasData = tasks.hasData();
+  t.lastUpdate = tasks.lastUpdate();
+  t.stale = t.hasData && t.now - t.lastUpdate > static_cast<time_t>(TASKS_STALE_MIN * 60);
+  return t;
+}
+
 CalendarView calendarView(const Calendar &calendar, const DateTime &now)
 {
   CalendarView c;
@@ -266,17 +304,23 @@ int main(int argc, char **argv)
     printf("%s %s\n", ok ? "wrote" : "FAILED", path.c_str());
     failures += ok ? 0 : 1;
   };
-  // Two pages, as on the device with the calendar enabled
+  // Three pages, as on the device with the calendar and tasks enabled
   auto save = [&](const char *name, DashboardState s) {
     s.page = 0;
-    s.pageCount = 2;
+    s.pageCount = 3;
     uiDrawDashboard(display.u8g2(), s);
     write(name);
   };
   auto saveCalendar = [&](const char *name, DashboardState s, const CalendarView &c) {
     s.page = 1;
-    s.pageCount = 2;
+    s.pageCount = 3;
     uiDrawCalendar(display.u8g2(), s, c);
+    write(name);
+  };
+  auto saveTasks = [&](const char *name, DashboardState s, const TasksView &t) {
+    s.page = 2;
+    s.pageCount = 3;
+    uiDrawTasks(display.u8g2(), s, t);
     write(name);
   };
 
@@ -333,6 +377,16 @@ int main(int argc, char **argv)
   // Before the PC bridge has pushed anything
   Calendar empty;
   saveCalendar("calendar-empty.png", running, calendarView(empty, running.now));
+
+  // Tasks: two high-priority ones on top, the second one selected
+  TaskList tasks;
+  fillTasks(tasks, dateTimeToEpoch({2026, 10, 20, 14, 15, 0, 2}));
+  running.now = {2026, 10, 20, 14, 27, 0, 2};
+  saveTasks("tasks.png", running, tasksView(tasks, running.now, 1));
+
+  // Before the PC task page has pushed anything
+  TaskList noTasks;
+  saveTasks("tasks-empty.png", running, tasksView(noTasks, running.now, 0));
 
   return failures == 0 ? 0 : 1;
 }

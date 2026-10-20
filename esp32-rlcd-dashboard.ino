@@ -7,14 +7,18 @@
     - Date line
     - Temperature and humidity (SHTC3) with a ~22 h chart
     - Header with WiFi signal (only while connected) and battery level
-    - Today's Teams/Outlook meetings pushed from a PC (tools/calendar-bridge),
-      with beeps 5 minutes before and at the start; KEY switches screens,
-      BOOT cycles the charts (dashboard) or mutes the beeps (calendar)
+    - Today's Teams/Outlook meetings pushed from a PC (pc/calendar_bridge),
+      with beeps 5 minutes before and at the start
+    - Pending tasks from a small web page on a PC (pc/tasks_server)
+    - KEY switches screens; BOOT cycles the charts (dashboard), mutes the beeps
+      (calendar) or selects/finishes/deletes tasks (tasks)
+    - The calendar and tasks screens are turned on by CALENDAR_TOKEN and
+      TASKS_TOKEN in secrets.h
 
   Built to run on little power: the screen is redrawn once per minute (or on a
-  KEY press), the CPU light-sleeps in between, Bluetooth is never started and
+  button press), the CPU light-sleeps in between, Bluetooth is never started and
   WiFi is only on during short windows (see WIFI_WINDOW_PERIOD_MIN) to take the
-  calendar from the PC and, once an hour, to re-sync the clock.
+  calendar and tasks from the PC and, once an hour, to re-sync the clock.
 
   All settings live in config.h; WiFi credentials go in secrets.h
   (copy secrets.example.h). See README.md for build instructions.
@@ -25,17 +29,19 @@
 #include <esp_sleep.h>
 
 #include "config.h"
-#include "src/battery.h"
-#include "src/calendar.h"
-#include "src/calendar_server.h"
-#include "src/date_time.h"
-#include "src/history.h"
-#include "src/network.h"
-#include "src/pcf85063.h"
-#include "src/shtc3.h"
-#include "src/speaker.h"
-#include "src/st7305_u8g2.h"
-#include "src/ui.h"
+#include "src/drivers/battery.h"
+#include "src/drivers/button.h"
+#include "src/drivers/pcf85063.h"
+#include "src/drivers/shtc3.h"
+#include "src/drivers/speaker.h"
+#include "src/drivers/st7305_u8g2.h"
+#include "src/model/calendar.h"
+#include "src/model/date_time.h"
+#include "src/model/history.h"
+#include "src/model/tasks.h"
+#include "src/net/network.h"
+#include "src/net/push_server.h"
+#include "src/ui/ui.h"
 
 // ---------------- Hardware ----------------
 static ST7305_U8g2 lcd(PIN_LCD_SCK, PIN_LCD_MOSI, PIN_LCD_DC, PIN_LCD_CS, PIN_LCD_RST);
@@ -51,8 +57,10 @@ static DateTime currentTime;
 static float temperatureC = NAN;
 static float humidityPct = NAN;
 static Calendar calendar;
+static TaskList tasks;
+static int taskSelected = 0;         // Index into tasks, moved with BOOT on the tasks screen
 
-enum class Screen { Dashboard, Calendar };
+enum class Screen { Dashboard, Calendar, Tasks };
 static Screen screen = Screen::Dashboard;
 
 static bool rtcTimeInvalid = false;  // RTC lost power; showing compile time
@@ -62,7 +70,9 @@ static bool ntpFailed = false;       // Last attempt failed: retry every NTP_RET
 static time_t ntpAttemptEpoch = 0;   // When it was made
 
 static bool windowOpen = false;      // WiFi up and listening for the PC
-static bool windowServed = false;    // Calendar received in this window: don't reopen
+static bool calendarServed = false;  // Received in this window
+static bool tasksServed = false;
+static bool windowServed = false;    // Everything enabled received in this window: don't reopen
 static uint32_t closeAtMs = 0;       // Pending close after a push (0 = none)
 
 static int lastMinute = -1;          // Minute of the last RTC reading handled
@@ -71,41 +81,6 @@ static uint32_t lastClockPollMs = 0;
 static ChartView chartView = ChartView::Both;
 static bool alertsMuted = false;     // Meeting beeps silenced with BOOT on the calendar screen
 static uint8_t mutedDay = 0;         // Day of the month it was muted: beeps come back on the next one
-
-// Active-low button with debounce.
-struct Button {
-  explicit Button(int pin) : pin(pin) {}
-
-  // Debounced press (falling edge).
-  bool pressed()
-  {
-    bool level = digitalRead(pin);
-    if (level != lastLevel) {
-      lastLevel = level;
-      changedMs = millis();
-    }
-    if (level == stableLevel || millis() - changedMs < BUTTON_DEBOUNCE_MS) return false;
-
-    stableLevel = level;
-    return level == LOW;
-  }
-
-  // Released and settled: safe to sleep (the wake-up on a low level would fire at once otherwise).
-  bool idle() const { return digitalRead(pin) == HIGH && stableLevel == HIGH; }
-
-  // Input with pull-up that also wakes the chip from light sleep.
-  void begin() const
-  {
-    pinMode(pin, INPUT_PULLUP);
-    gpio_wakeup_enable(static_cast<gpio_num_t>(pin), GPIO_INTR_LOW_LEVEL);
-    esp_sleep_enable_gpio_wakeup();
-  }
-
-  const int pin;
-  bool stableLevel = HIGH;
-  bool lastLevel = HIGH;
-  uint32_t changedMs = 0;
-};
 
 static Button keyButton(PIN_BUTTON_KEY);    // Switches screens
 static Button bootButton(PIN_BUTTON_BOOT);  // Per-screen action: chart view / mute
@@ -213,7 +188,7 @@ static bool ntpRetryDue()
 
 static void closeWindow()
 {
-  if (CALENDAR_ENABLED) calendarServerStop();
+  if (PUSH_ENABLED) pushServerStop();
   wifiOff();
   windowOpen = false;
   closeAtMs = 0;
@@ -222,7 +197,7 @@ static void closeWindow()
 // Brings WiFi up, starts listening for the PC and re-syncs the clock if due.
 static void openWindow()
 {
-  if (!CALENDAR_ENABLED && !ntpDue()) return;
+  if (!PUSH_ENABLED && !ntpDue()) return;
 
   if (!wifiConnect(WIFI_CONNECT_TIMEOUT_MS)) {
     Serial.println("[wifi] Could not connect, trying again in the next window");
@@ -231,13 +206,13 @@ static void openWindow()
     return;
   }
   windowOpen = true;
-  if (CALENDAR_ENABLED) calendarServerStart();
+  if (PUSH_ENABLED) pushServerStart();
 
   if (ntpDue()) syncTimeFromNtp();
   rtc.read(currentTime);
   lastMinute = currentTime.minute;  // The connection may have taken a while
 
-  if (!CALENDAR_ENABLED) closeWindow();
+  if (!PUSH_ENABLED) closeWindow();
 }
 
 // Radio on just long enough to retry a failed clock sync.
@@ -254,7 +229,7 @@ static void retryNtpOnly()
 static void manageWindow()
 {
   if (!windowActiveAt(currentTime.minute)) {
-    windowServed = false;
+    windowServed = calendarServed = tasksServed = false;
     if (windowOpen) closeWindow();
     else if (ntpRetryDue()) retryNtpOnly();
     return;
@@ -294,8 +269,8 @@ static DashboardState dashboardState()
 
   s.uptimeSec = millis() / 1000;
 
-  s.pageCount = CALENDAR_ENABLED ? 2 : 1;
-  s.page = screen == Screen::Calendar ? 1 : 0;
+  s.pageCount = PAGE_COUNT;
+  s.page = screen == Screen::Dashboard ? 0 : screen == Screen::Calendar ? 1 : PAGE_COUNT - 1;
   return s;
 }
 
@@ -311,10 +286,34 @@ static void drawCalendar()
   uiDrawCalendar(lcd.u8g2(), dashboardState(), c);
 }
 
+static void drawTasks()
+{
+  TasksView t;
+  t.now = nowEpoch();
+  t.list = &tasks;
+  t.selected = taskSelected;
+  t.hasData = tasks.hasData();
+  t.lastUpdate = tasks.lastUpdate();
+  t.stale = t.hasData && t.now - t.lastUpdate > static_cast<time_t>(TASKS_STALE_MIN * 60);
+
+  uiDrawTasks(lcd.u8g2(), dashboardState(), t);
+}
+
 static void drawScreen()
 {
-  if (CALENDAR_ENABLED && screen == Screen::Calendar) drawCalendar();
+  if (CALENDAR_ENABLED && screen == Screen::Calendar)  drawCalendar();
+  else if (TASKS_ENABLED && screen == Screen::Tasks)  drawTasks();
   else                                                 uiDrawDashboard(lcd.u8g2(), dashboardState());
+}
+
+// The screen after `screen`, skipping the ones that are not enabled.
+static Screen nextScreen()
+{
+  switch (screen) {
+    case Screen::Dashboard: return CALENDAR_ENABLED ? Screen::Calendar : TASKS_ENABLED ? Screen::Tasks : Screen::Dashboard;
+    case Screen::Calendar:  return TASKS_ENABLED ? Screen::Tasks : Screen::Dashboard;
+    default:                return Screen::Dashboard;
+  }
 }
 
 // Beeps (and jumps to the calendar) when a meeting is about to start or starts.
@@ -351,13 +350,56 @@ static void leaveCalendarWhenDone()
 static void handleKey()
 {
   if (speaker.isPlaying()) speaker.stop();
-  else screen = screen == Screen::Dashboard ? Screen::Calendar : Screen::Dashboard;
+  else screen = nextScreen();
 }
 
-// BOOT: on the calendar it mutes/unmutes the meeting beeps (until the next day);
-// on the dashboard it cycles the charts: both, temperature only, humidity only.
-static void handleBoot()
+// Keeps the selection on the same task after the list changed (a push, or one
+// finished/deleted), else on the same position.
+static void keepTaskSelection(uint32_t selectedId)
 {
+  for (int i = 0; i < tasks.count(); i++) {
+    if (tasks.at(i).id == selectedId) {
+      taskSelected = i;
+      return;
+    }
+  }
+  taskSelected = constrain(taskSelected, 0, max(tasks.count() - 1, 0));
+}
+
+// BOOT on the tasks screen: click selects the next task, double click finishes the
+// selected one and a long press deletes it.
+static void handleBootTasks(Gesture gesture)
+{
+  if (tasks.count() == 0) return;
+  taskSelected = constrain(taskSelected, 0, tasks.count() - 1);
+
+  switch (gesture) {
+    case Gesture::Click:
+      taskSelected = (taskSelected + 1) % tasks.count();
+      break;
+    case Gesture::DoubleClick:
+      Serial.printf("[tasks] Done: %s\n", tasks.at(taskSelected).text);
+      tasks.markDone(taskSelected);
+      break;
+    case Gesture::LongPress:
+      Serial.printf("[tasks] Deleted: %s\n", tasks.at(taskSelected).text);
+      tasks.remove(taskSelected);
+      break;
+    default:
+      return;
+  }
+  taskSelected = constrain(taskSelected, 0, max(tasks.count() - 1, 0));
+}
+
+// BOOT, per screen. Tasks: see handleBootTasks. Calendar: mutes/unmutes the meeting
+// beeps (until the next day). Dashboard: cycles the charts: both, temperature only,
+// humidity only. There a long press counts as a click.
+static void handleBoot(Gesture gesture)
+{
+  if (TASKS_ENABLED && screen == Screen::Tasks) {
+    handleBootTasks(gesture);
+    return;
+  }
   if (CALENDAR_ENABLED && screen == Screen::Calendar) {
     alertsMuted = !alertsMuted;
     mutedDay = currentTime.day;
@@ -386,6 +428,10 @@ static void printSummary()
   if (CALENDAR_ENABLED) {
     Serial.printf("Speaker : %s\n", speaker.isPresent() ? "OK" : "missing");
     Serial.printf("Calendar: http://%s.local/calendar (WiFi windows every %lu min)\n", MDNS_HOSTNAME,
+                  static_cast<unsigned long>(WIFI_WINDOW_PERIOD_MIN));
+  }
+  if (TASKS_ENABLED) {
+    Serial.printf("Tasks   : http://%s.local/tasks (WiFi windows every %lu min)\n", MDNS_HOSTNAME,
                   static_cast<unsigned long>(WIFI_WINDOW_PERIOD_MIN));
   }
 }
@@ -418,11 +464,9 @@ void setup()
   initRtc();
   battery.begin();
   bootButton.begin();
-  if (CALENDAR_ENABLED) {
-    keyButton.begin();
-    if (!speaker.begin(AUDIO_SAMPLE_RATE, BEEP_FREQ_HZ, BEEP_VOLUME_PCT)) {
-      Serial.println("[audio] ES8311 not detected");
-    }
+  if (PAGE_COUNT > 1) keyButton.begin();
+  if (CALENDAR_ENABLED && !speaker.begin(AUDIO_SAMPLE_RATE, BEEP_FREQ_HZ, BEEP_VOLUME_PCT)) {
+    Serial.println("[audio] ES8311 not detected");
   }
 
   uiDrawSplash(lcd.u8g2(), "Syncing clock (NTP)...");
@@ -434,11 +478,13 @@ void setup()
     noteNtpAttempt(false);
   }
   readSensors();
-  if (CALENDAR_ENABLED && wifiConfigured()) calendarServerBegin(calendar, nowEpoch);
+  if (PUSH_ENABLED && wifiConfigured()) {
+    pushServerBegin(CALENDAR_ENABLED ? &calendar : nullptr, TASKS_ENABLED ? &tasks : nullptr, nowEpoch);
+  }
 
   // Booted inside a window: stay up for the PC. Otherwise radio off until the next one.
-  if (CALENDAR_ENABLED && wifiConnected() && windowActiveAt(currentTime.minute)) {
-    calendarServerStart();
+  if (PUSH_ENABLED && wifiConnected() && windowActiveAt(currentTime.minute)) {
+    pushServerStart();
     windowOpen = true;
   } else {
     wifiOff();
@@ -470,7 +516,7 @@ static esp_sleep_wakeup_cause_t sleepUntilNextMinute()
 static bool mustStayAwake()
 {
   return windowOpen || speaker.isPlaying() || !bootButton.idle() ||
-         (CALENDAR_ENABLED && !keyButton.idle());
+         (PAGE_COUNT > 1 && !keyButton.idle());
 }
 
 // New minute: refresh readings, alerts and the WiFi window.
@@ -493,22 +539,38 @@ void loop()
 
   if (!mustStayAwake()) timerWake = sleepUntilNextMinute() == ESP_SLEEP_WAKEUP_TIMER;
 
-  if (CALENDAR_ENABLED && keyButton.pressed()) {
+  if (PAGE_COUNT > 1 && keyButton.pressed()) {
     handleKey();
     redraw = true;
   }
-  if (bootButton.pressed()) {
-    handleBoot();
+  // Double clicks only mean something on the tasks screen: elsewhere BOOT reacts at once
+  const Gesture gesture = bootButton.poll(TASKS_ENABLED && screen == Screen::Tasks);
+  if (gesture != Gesture::None) {
+    handleBoot(gesture);
     redraw = true;
   }
 
-  // A push ends the window shortly after; alerts that its events bring are not left to the next minute
-  if (windowOpen && CALENDAR_ENABLED && calendarServerLoop()) {
-    rtc.read(currentTime);
-    checkCalendarAlerts();
-    windowServed = true;
-    closeAtMs = millis() + CLOSE_DELAY_MS;
-    redraw = true;
+  // Once everything enabled has arrived the window ends shortly after; alerts that
+  // a push brings are not left to the next minute
+  if (windowOpen && PUSH_ENABLED) {
+    const uint32_t selectedId = taskSelected < tasks.count() ? tasks.at(taskSelected).id : 0;
+    const uint8_t pushed = pushServerLoop();
+    if (pushed != 0) {
+      rtc.read(currentTime);
+      if (pushed & PUSH_CALENDAR) {
+        checkCalendarAlerts();
+        calendarServed = true;
+      }
+      if (pushed & PUSH_TASKS) {
+        keepTaskSelection(selectedId);
+        tasksServed = true;
+      }
+      if ((!CALENDAR_ENABLED || calendarServed) && (!TASKS_ENABLED || tasksServed)) {
+        windowServed = true;
+        closeAtMs = millis() + CLOSE_DELAY_MS;
+      }
+      redraw = true;
+    }
   }
   if (closeAtMs != 0 && static_cast<int32_t>(millis() - closeAtMs) >= 0) {
     closeWindow();

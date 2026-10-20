@@ -28,7 +28,7 @@ find "$U8G2_DIR/src/clib" -name '*.c' -print0 |
 
 g++ -std=c++17 -O1 -Wall -Wextra \
   -I "$HERE/stubs" -I "$U8G2_DIR/src" -I "$ROOT/src" \
-  "$HERE/main.cpp" "$ROOT/src/ui.cpp" "$ROOT/src/calendar.cpp" "$OBJ"/*.o \
+  "$HERE/main.cpp" "$ROOT"/src/ui/*.cpp "$ROOT/src/model/calendar.cpp" "$ROOT/src/model/tasks.cpp" "$OBJ"/*.o \
   -o "$BUILD/screenshots"
 
 mkdir -p "$ROOT/docs/images"

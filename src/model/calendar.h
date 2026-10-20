@@ -15,7 +15,7 @@
 #include <stdint.h>
 #include <time.h>
 
-#include "../config.h"
+#include "../../config.h"
 
 struct CalendarEvent {
   uint32_t id = 0;
