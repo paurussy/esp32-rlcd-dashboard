@@ -1,7 +1,7 @@
 /*
-  main.cpp - Renders the dashboard on the host and saves it as PNG files
+  main.cpp - Renders the screens on the host and saves them as PNG files
   ----------------------------------------------------------------------
-  Uses the real src/ui.cpp with U8g2 drawing into an in-memory frame buffer,
+  Uses the real src/ui.cpp (and src/calendar.cpp for the meetings) with U8g2 drawing into an in-memory frame buffer,
   so the images match what the device shows pixel for pixel.
 
   Usage: screenshots <output-dir>
@@ -10,9 +10,12 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
+#include <ctime>
 #include <string>
 #include <vector>
 
+#include "calendar.h"
 #include "ui.h"
 
 namespace {
@@ -203,6 +206,44 @@ DashboardState baseState(const History &history)
   return s;
 }
 
+// A Tuesday of meetings, pushed to `calendar` the way the PC bridge does it.
+void fillCalendar(Calendar &calendar, time_t receivedAt)
+{
+  struct Meeting {
+    uint8_t startH, startM, endH, endM;
+    const char *subject, *location;
+  };
+  const Meeting meetings[] = {
+    {9, 0, 9, 15, "Daily stand-up", "Microsoft Teams Meeting"},
+    {10, 0, 10, 45, "Sprint planning · Dashboard v2", "Microsoft Teams Meeting"},
+    {11, 0, 11, 30, "Design review", "Room Agora"},
+    {12, 30, 13, 30, "Lunch with the team", ""},
+    {15, 0, 16, 0, "Client demo: calendar integration with the ESP32 board", "Microsoft Teams Meeting"},
+    {17, 30, 18, 0, "Weekly retro", "Microsoft Teams Meeting"},
+  };
+
+  std::string body = "v1\t" + std::to_string(static_cast<long>(receivedAt)) + "\n";
+  uint32_t id = 1000;
+  for (const Meeting &m : meetings) {
+    time_t start = dateTimeToEpoch({2026, 10, 20, m.startH, m.startM, 0, 2});
+    time_t end = dateTimeToEpoch({2026, 10, 20, m.endH, m.endM, 0, 2});
+    body += std::to_string(id++) + "\t" + std::to_string(static_cast<long>(start)) + "\t" +
+            std::to_string(static_cast<long>(end)) + "\t" + m.subject + "\t" + m.location + "\n";
+  }
+  if (calendar.update(body.c_str(), receivedAt) != 6) fprintf(stderr, "calendar parse failed\n");
+}
+
+CalendarView calendarView(const Calendar &calendar, const DateTime &now)
+{
+  CalendarView c;
+  c.now = dateTimeToEpoch(now);
+  c.count = calendar.upcoming(c.now, c.events, CALENDAR_VISIBLE_EVENTS);
+  c.hasData = calendar.hasData();
+  c.lastUpdate = calendar.lastUpdate();
+  c.stale = c.hasData && c.now - c.lastUpdate > static_cast<time_t>(CALENDAR_STALE_MIN * 60);
+  return c;
+}
+
 }  // namespace
 
 int main(int argc, char **argv)
@@ -215,12 +256,28 @@ int main(int argc, char **argv)
   OffscreenDisplay display;
   int failures = 0;
 
-  auto save = [&](const char *name, const DashboardState &s) {
-    uiDrawDashboard(display.u8g2(), s);
+  // Same time zone as the device, for the calendar times
+  setenv("TZ", TIMEZONE, 1);
+  tzset();
+
+  auto write = [&](const char *name) {
     std::string path = outDir + "/" + name;
     bool ok = writePng(path, display);
     printf("%s %s\n", ok ? "wrote" : "FAILED", path.c_str());
     failures += ok ? 0 : 1;
+  };
+  // Two pages, as on the device with the calendar enabled
+  auto save = [&](const char *name, DashboardState s) {
+    s.page = 0;
+    s.pageCount = 2;
+    uiDrawDashboard(display.u8g2(), s);
+    write(name);
+  };
+  auto saveCalendar = [&](const char *name, DashboardState s, const CalendarView &c) {
+    s.page = 1;
+    s.pageCount = 2;
+    uiDrawCalendar(display.u8g2(), s, c);
+    write(name);
   };
 
   // Running for a day on battery, connected to WiFi
@@ -249,6 +306,20 @@ int main(int argc, char **argv)
   booting.humidity = 58.0f;
   booting.uptimeSec = 31 * 60 + 12;
   save("dashboard-offline.png", booting);
+
+  // Calendar: in a meeting, with the rest of the day below
+  Calendar calendar;
+  fillCalendar(calendar, dateTimeToEpoch({2026, 10, 20, 10, 26, 0, 2}));
+  running.now = {2026, 10, 20, 10, 27, 0, 2};
+  saveCalendar("calendar.png", running, calendarView(calendar, running.now));
+
+  // Between meetings, and the PC has gone quiet: the next one is framed instead of inverted
+  running.now = {2026, 10, 20, 10, 52, 0, 2};
+  saveCalendar("calendar-next.png", running, calendarView(calendar, running.now));
+
+  // Before the PC bridge has pushed anything
+  Calendar empty;
+  saveCalendar("calendar-empty.png", running, calendarView(empty, running.now));
 
   return failures == 0 ? 0 : 1;
 }

@@ -16,3 +16,8 @@ build/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Calendar bridge local settings and logs
+tools/calendar-bridge/config.ini
+tools/calendar-bridge/*.log*
+__pycache__/

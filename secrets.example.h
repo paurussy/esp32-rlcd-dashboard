@@ -9,3 +9,7 @@
 // 2.4 GHz network used to set the clock via NTP. Leave empty to disable WiFi.
 #define WIFI_SSID     "your-ssid"
 #define WIFI_PASSWORD "your-password"
+
+// Shared secret sent by the PC calendar bridge (X-Token header).
+// Use the same value in tools/calendar-bridge/config.ini.
+#define CALENDAR_TOKEN "change-me"

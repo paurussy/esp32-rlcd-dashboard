@@ -7,6 +7,8 @@
     - Date line
     - Temperature and humidity (SHTC3) with a ~22 h chart
     - Header with WiFi signal and battery level
+    - Today's Teams/Outlook meetings pushed from a PC (tools/calendar-bridge),
+      with beeps 5 minutes before and at the start; KEY switches screens
     - Optional low-power mode (LOW_POWER_MODE in config.h)
 
   All settings live in config.h; WiFi credentials go in secrets.h
@@ -19,11 +21,14 @@
 
 #include "config.h"
 #include "src/battery.h"
+#include "src/calendar.h"
+#include "src/calendar_server.h"
 #include "src/date_time.h"
 #include "src/history.h"
 #include "src/network.h"
 #include "src/pcf85063.h"
 #include "src/shtc3.h"
+#include "src/speaker.h"
 #include "src/st7305_u8g2.h"
 #include "src/ui.h"
 
@@ -32,15 +37,22 @@ static ST7305_U8g2 lcd(PIN_LCD_SCK, PIN_LCD_MOSI, PIN_LCD_DC, PIN_LCD_CS, PIN_LC
 static Shtc3 climateSensor(Wire, I2C_ADDR_SHTC3);
 static Pcf85063 rtc(Wire, I2C_ADDR_PCF85063);
 static Battery battery(PIN_BATTERY_ADC);
+static Speaker speaker(Wire, I2C_ADDR_ES8311,
+                       {PIN_I2S_MCLK, PIN_I2S_BCLK, PIN_I2S_WS, PIN_I2S_DOUT, PIN_AUDIO_PA});
 
 // ---------------- State ----------------
 static History history;
 static DateTime currentTime;
 static float temperatureC = NAN;
 static float humidityPct = NAN;
+static Calendar calendar;
+
+enum class Screen { Dashboard, Calendar };
+static Screen screen = Screen::Dashboard;
 
 static bool rtcTimeInvalid = false;  // RTC lost power; showing compile time
 static bool timeSynced = false;      // NTP succeeded at least once
+static bool lastSyncOk = false;      // Last NTP attempt succeeded (else retry sooner)
 
 static uint32_t lastSensorReadMs = 0;
 static uint32_t lastHistoryMs = 0;
@@ -50,6 +62,9 @@ static uint32_t lastNtpAttemptMs = 0;
 //                          HELPERS
 // ============================================================
 static constexpr uint32_t minutesToMs(uint32_t minutes) { return minutes * 60UL * 1000UL; }
+
+// Current Unix time, from the RTC reading taken once per second.
+static time_t nowEpoch() { return dateTimeToEpoch(currentTime); }
 
 static bool climateValid()
 {
@@ -108,22 +123,25 @@ static void updateHistory(uint32_t now)
   if (climateValid()) history.push(temperatureC, humidityPct);
 }
 
-// Periodic NTP re-sync. In normal mode it never blocks waiting for WiFi;
-// in low-power mode the radio is switched on just for the sync.
+// Periodic NTP re-sync: every NTP_RESYNC_MIN, or NTP_RETRY_MIN after a failure.
+// In normal mode it never blocks waiting for WiFi; in low-power mode the radio
+// is switched on just for the sync.
 static void resyncTimeIfDue(uint32_t now)
 {
-  const uint32_t interval = minutesToMs(timeSynced ? NTP_RESYNC_MIN : NTP_RETRY_MIN);
+  const uint32_t interval = minutesToMs(lastSyncOk ? NTP_RESYNC_MIN : NTP_RETRY_MIN);
   if (!rtc.isPresent() || now - lastNtpAttemptMs < interval) return;
 
   lastNtpAttemptMs = now;
   if (LOW_POWER_MODE) {
-    if (wifiConnect(WIFI_CONNECT_TIMEOUT_MS)) syncTimeFromNtp();
+    lastSyncOk = wifiConnect(WIFI_CONNECT_TIMEOUT_MS) && syncTimeFromNtp();
     wifiOff();
   } else if (wifiConnected()) {
-    syncTimeFromNtp();
+    lastSyncOk = syncTimeFromNtp();
   } else {
+    lastSyncOk = false;
     wifiReconnect();
   }
+  if (!lastSyncOk) Serial.printf("[ntp] Sync failed, retrying in %lu min\n", static_cast<unsigned long>(NTP_RETRY_MIN));
 }
 
 // Light-sleeps until just after the next minute starts.
@@ -139,7 +157,7 @@ static void sleepUntilNextMinute()
   lcd.holdPins(false);
 }
 
-static void drawDashboard()
+static DashboardState dashboardState()
 {
   DashboardState s;
 
@@ -168,7 +186,82 @@ static void drawDashboard()
 
   s.uptimeSec = millis() / 1000;
 
-  uiDrawDashboard(lcd.u8g2(), s);
+  s.pageCount = CALENDAR_ENABLED ? 2 : 1;
+  s.page = screen == Screen::Calendar ? 1 : 0;
+  return s;
+}
+
+static void drawCalendar()
+{
+  CalendarView c;
+  c.now = nowEpoch();
+  c.count = calendar.upcoming(c.now, c.events, CALENDAR_VISIBLE_EVENTS);
+  c.hasData = calendar.hasData();
+  c.lastUpdate = calendar.lastUpdate();
+  c.stale = c.hasData && c.now - c.lastUpdate > static_cast<time_t>(CALENDAR_STALE_MIN * 60);
+
+  uiDrawCalendar(lcd.u8g2(), dashboardState(), c);
+}
+
+static void drawScreen()
+{
+  if (CALENDAR_ENABLED && screen == Screen::Calendar) drawCalendar();
+  else                                                 uiDrawDashboard(lcd.u8g2(), dashboardState());
+}
+
+// Beeps (and jumps to the calendar) when a meeting is about to start or starts.
+static void checkCalendarAlerts()
+{
+  if (rtcTimeInvalid && !timeSynced) return;  // Clock not trustworthy yet
+
+  const CalendarEvent *event = nullptr;
+  CalendarAlert alert = calendar.pollAlerts(nowEpoch(), &event);
+  if (alert == CalendarAlert::None) return;
+
+  Serial.printf("[cal] %s: %s\n", alert == CalendarAlert::Early ? "Starting soon" : "Starting now",
+                event->subject);
+  speaker.beep(alert == CalendarAlert::Early ? BeepPattern::Early : BeepPattern::Start);
+  screen = Screen::Calendar;
+}
+
+// Back to the dashboard once, when the last meeting of the day ends.
+// Edge-triggered: going back to the empty calendar with KEY stays there.
+static void leaveCalendarWhenDone()
+{
+  static int lastUpcoming = 0;
+
+  const CalendarEvent *unused[1];
+  int upcoming = calendar.upcoming(nowEpoch(), unused, 1);
+  if (lastUpcoming > 0 && upcoming == 0 && screen == Screen::Calendar) {
+    Serial.println("[cal] No more meetings, back to the dashboard");
+    screen = Screen::Dashboard;
+  }
+  lastUpcoming = upcoming;
+}
+
+// Debounced KEY press (falling edge).
+static bool keyPressed()
+{
+  static bool stableLevel = HIGH;
+  static bool lastLevel = HIGH;
+  static uint32_t changedMs = 0;
+
+  bool level = digitalRead(PIN_BUTTON_KEY);
+  if (level != lastLevel) {
+    lastLevel = level;
+    changedMs = millis();
+  }
+  if (level == stableLevel || millis() - changedMs < BUTTON_DEBOUNCE_MS) return false;
+
+  stableLevel = level;
+  return level == LOW;
+}
+
+// KEY silences a beep in progress; otherwise it switches screens.
+static void handleKey()
+{
+  if (speaker.isPlaying()) speaker.stop();
+  else screen = screen == Screen::Dashboard ? Screen::Calendar : Screen::Dashboard;
 }
 
 static void printSummary()
@@ -182,6 +275,10 @@ static void printSummary()
                 currentTime.hour, currentTime.minute, currentTime.second);
   Serial.printf("Battery : %.2f V (%d %%)\n", battery.voltage(), battery.percent());
   Serial.printf("WiFi    : %s\n", wifiConnected() ? WiFi.localIP().toString().c_str() : "disconnected");
+  if (CALENDAR_ENABLED) {
+    Serial.printf("Speaker : %s\n", speaker.isPresent() ? "OK" : "missing");
+    Serial.printf("Calendar: http://%s.local/calendar\n", MDNS_HOSTNAME);
+  }
 }
 
 // ============================================================
@@ -191,6 +288,10 @@ void setup()
 {
   Serial.begin(SERIAL_BAUD);
   delay(200);
+
+  // Local time zone for epoch conversions, even before NTP succeeds
+  setenv("TZ", TIMEZONE, 1);
+  tzset();
 
   if (!lcd.begin(0, U8G2_R1)) {
     Serial.println("[lcd] Frame buffer allocation failed");
@@ -204,14 +305,21 @@ void setup()
   }
   initRtc();
   battery.begin();
+  if (CALENDAR_ENABLED) {
+    pinMode(PIN_BUTTON_KEY, INPUT_PULLUP);
+    if (!speaker.begin(AUDIO_SAMPLE_RATE, BEEP_FREQ_HZ, BEEP_VOLUME_PCT)) {
+      Serial.println("[audio] ES8311 not detected");
+    }
+  }
 
   uiDrawSplash(lcd.u8g2(), "Syncing clock (NTP)...");
   if (wifiConnect(WIFI_CONNECT_TIMEOUT_MS)) {
-    syncTimeFromNtp();
+    lastSyncOk = syncTimeFromNtp();
   } else {
     Serial.println("[wifi] Could not connect");
   }
   if (LOW_POWER_MODE) wifiOff();
+  if (CALENDAR_ENABLED && wifiConfigured()) calendarServerBegin(calendar, nowEpoch);
   lastNtpAttemptMs = millis();
 
   readSensors();
@@ -219,7 +327,8 @@ void setup()
   lastSensorReadMs = lastHistoryMs = millis();
 
   printSummary();
-  drawDashboard();
+  drawScreen();
+  if (CALENDAR_ENABLED && BEEP_ON_BOOT) speaker.beep(BeepPattern::Test);
 }
 
 // Low-power mode: one full cycle per minute, sleeping in between.
@@ -231,19 +340,32 @@ static void lowPowerLoop()
   readSensors();
   updateHistory(now);
   resyncTimeIfDue(now);
-  drawDashboard();
+  drawScreen();
 }
 
-// Normal mode: refresh every second.
+// Normal mode: refresh every second, or right away on a key press or calendar push.
 static void normalLoop()
 {
   const uint32_t now = millis();
+  bool redraw = false;
 
+  if (CALENDAR_ENABLED) {
+    if (calendarServerLoop()) redraw = true;
+    if (keyPressed()) {
+      handleKey();
+      redraw = true;
+    }
+  }
   if (now - lastSensorReadMs >= SENSOR_READ_INTERVAL_MS) {
     lastSensorReadMs = now;
     readSensors();
-    drawDashboard();
+    if (CALENDAR_ENABLED) {
+      checkCalendarAlerts();
+      leaveCalendarWhenDone();
+    }
+    redraw = true;
   }
+  if (redraw) drawScreen();
   updateHistory(now);
   resyncTimeIfDue(now);
 
