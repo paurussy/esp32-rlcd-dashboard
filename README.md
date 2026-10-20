@@ -27,6 +27,15 @@ Desk clock and indoor climate dashboard for the
 </details>
 
 <details>
+<summary>BOOT: single chart on the dashboard, muted beeps on the calendar</summary>
+
+![Temperature chart](docs/images/dashboard-temperature.png)
+
+![Calendar with beeps muted](docs/images/calendar-muted.png)
+
+</details>
+
+<details>
 <summary>Calendar between meetings, and before the first push</summary>
 
 ![Next meeting](docs/images/calendar-next.png)
@@ -96,6 +105,12 @@ classic app) and pushes today's meetings to the board over WiFi. See
   and the screen switches to the calendar. **Three long beeps** when it starts.
 - **KEY** button (next to BOOT): switches between dashboard and calendar, or
   silences a beep in progress. Dots in the header show the current page.
+- **BOOT** button, a different action on each screen:
+  - Calendar: mutes or unmutes the meeting beeps. While muted, a crossed-out
+    speaker shows in the header and a meeting still switches the screen to the
+    calendar, just without sound. Beeps come back by themselves the next day.
+  - Dashboard: cycles the charts: both, temperature only, humidity only (the
+    chosen one gets the full width and the other reading moves to its title).
 - When the last meeting of the day ends, the board goes back to the dashboard
   once (pressing KEY afterwards still shows the empty calendar).
 - Each push replaces all events with the latest version: deleted meetings
@@ -166,6 +181,7 @@ Also make sure no serial monitor (e.g. Arduino IDE) has the port open.
 | ES8311 audio codec  | I2C + I2S | `0x18`; MCLK 16, BCLK 9, WS 45, DOUT 8 |
 | Speaker amplifier   | GPIO      | 46 (enable, active high)           |
 | KEY button          | GPIO      | 18 (active low)                    |
+| BOOT button         | GPIO      | 0 (active low; held at reset: download mode) |
 | Battery sense       | ADC       | GPIO 4 (1/3 divider)               |
 
 ## Notes

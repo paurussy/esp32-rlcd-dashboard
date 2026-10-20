@@ -46,8 +46,10 @@ constexpr int PIN_I2S_WS   = 45;
 constexpr int PIN_I2S_DOUT = 8;
 constexpr int PIN_AUDIO_PA = 46;
 
-// KEY button (active low). BOOT (GPIO 0) is left alone.
-constexpr int PIN_BUTTON_KEY = 18;
+// KEY and BOOT buttons (active low). BOOT is only special while the chip resets
+// (held, it enters download mode); afterwards it is a normal button.
+constexpr int PIN_BUTTON_KEY  = 18;
+constexpr int PIN_BUTTON_BOOT = 0;
 
 // ============================================================
 //                        PERIPHERALS
