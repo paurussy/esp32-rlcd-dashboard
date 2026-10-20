@@ -4,7 +4,7 @@
 #include <esp_sntp.h>
 #include <time.h>
 
-#include "../config.h"
+#include "../../config.h"
 
 namespace {
 

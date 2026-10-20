@@ -14,9 +14,13 @@
 #error "secrets.h not found: copy secrets.example.h to secrets.h and set your WiFi credentials."
 #endif
 
-// Older secrets.h files predate the calendar: an empty token disables the check.
+// Each PC feature is turned on by its token in secrets.h and ignored (no screen, no
+// endpoint) when the token is missing or empty. Older secrets.h files predate them.
 #ifndef CALENDAR_TOKEN
 #define CALENDAR_TOKEN ""
+#endif
+#ifndef TASKS_TOKEN
+#define TASKS_TOKEN ""
 #endif
 
 // ============================================================
@@ -76,7 +80,7 @@ constexpr uint32_t NTP_RESPONSE_TIMEOUT_MS = 8000;
 // WiFi is off except during short windows, one every WIFI_WINDOW_PERIOD_MIN
 // minutes: it opens at minute 14, 29, 44, 59 (period - 1) and closes at 01, 16,
 // 31, 46 (or as soon as the work is done). The PC bridge pushes the calendar
-// inside the window (see tools/calendar-bridge/).
+// inside the window (see pc/).
 constexpr uint32_t WIFI_WINDOW_PERIOD_MIN = 15;
 constexpr uint32_t WIFI_WINDOW_OPEN_BEFORE_MIN = 1;   // Opens this many minutes before the slot
 constexpr uint32_t WIFI_WINDOW_CLOSE_AFTER_MIN = 1;   // Closes this many minutes after it
@@ -113,16 +117,21 @@ constexpr float BATTERY_ABSENT_BELOW_V = 2.5f;  // Below this: USB power only
 constexpr float BATTERY_FULL_ABOVE_V   = 4.15f; // Above this: charging / charged
 
 // ============================================================
-//                    CALENDAR (TEAMS / OUTLOOK)
+//                    PC PUSH (CALENDAR AND TASKS)
 // ============================================================
-// A PC program (tools/calendar-bridge/) reads today's Outlook calendar and
-// pushes it to http://<MDNS_HOSTNAME>.local/calendar. CALENDAR_TOKEN is in secrets.h.
-// Also enables the speaker (meeting beeps) and the KEY button (switch screens).
+// Two PC programs (pc/) push to http://<MDNS_HOSTNAME>.local:
+// today's Outlook meetings to /calendar and the task list to /tasks. Each one
+// is enabled by its token in secrets.h (CALENDAR_TOKEN, TASKS_TOKEN) and adds a
+// screen; the calendar also enables the speaker (meeting beeps). With more than
+// one screen, the KEY button switches between them.
 // The board only listens during the WiFi windows, so the PC must push inside them.
-constexpr bool CALENDAR_ENABLED = true;
+constexpr bool CALENDAR_ENABLED = sizeof(CALENDAR_TOKEN) > 1;
+constexpr bool TASKS_ENABLED = sizeof(TASKS_TOKEN) > 1;
+constexpr bool PUSH_ENABLED = CALENDAR_ENABLED || TASKS_ENABLED;
+constexpr int  PAGE_COUNT = 1 + (CALENDAR_ENABLED ? 1 : 0) + (TASKS_ENABLED ? 1 : 0);
 
 constexpr const char *MDNS_HOSTNAME = "rlcd-dashboard";
-constexpr uint16_t CALENDAR_HTTP_PORT = 80;
+constexpr uint16_t PUSH_HTTP_PORT = 80;
 
 constexpr int      CALENDAR_MAX_EVENTS       = 16;  // Kept in RAM
 constexpr int      CALENDAR_VISIBLE_EVENTS   = 5;   // Current event + upcoming ones
@@ -131,6 +140,10 @@ constexpr uint32_t CALENDAR_ALERT_LATE_SEC   = 60;  // Start alerts missed by mo
 constexpr uint32_t CALENDAR_STALE_MIN        = 35;  // Warn when the PC hasn't pushed for this long
                                                      // (two missed 15 min windows)
 
+// Tasks
+constexpr int      TASKS_MAX_ITEMS = 20;  // Kept in RAM
+constexpr uint32_t TASKS_STALE_MIN = 35;  // Warn when the PC hasn't pushed for this long
+
 // Beeps
 constexpr uint32_t AUDIO_SAMPLE_RATE = 16000;
 constexpr uint32_t BEEP_FREQ_HZ      = 1000;
@@ -138,6 +151,10 @@ constexpr int      BEEP_VOLUME_PCT   = 60;     // Sample amplitude, 0..100
 constexpr bool     BEEP_ON_BOOT      = true;   // Short test beep after startup
 
 constexpr uint32_t BUTTON_DEBOUNCE_MS = 30;
+// BOOT on the tasks screen: a second click this soon makes a double click, and
+// held this long it is a long press.
+constexpr uint32_t BUTTON_DOUBLE_CLICK_MS = 400;
+constexpr uint32_t BUTTON_LONG_PRESS_MS = 1000;
 
 // ============================================================
 //                            POWER

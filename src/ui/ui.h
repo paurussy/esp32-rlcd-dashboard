@@ -1,17 +1,18 @@
 /*
-  ui.h - Screen rendering: dashboard (clock, sensor cards) and calendar
+  ui.h - Screen rendering: dashboard (clock, sensor cards), calendar and tasks
   ----------------------------------------------------------------
   Depends only on U8g2 and never touches hardware: the sketch fills a
-  DashboardState (and a CalendarView) and calls the ui*() functions.
+  DashboardState (and a CalendarView or TasksView) and calls the ui*() functions.
 */
 #pragma once
 
 #include <U8g2lib.h>
 #include <math.h>
 
-#include "calendar.h"
-#include "date_time.h"
-#include "history.h"
+#include "../model/calendar.h"
+#include "../model/date_time.h"
+#include "../model/history.h"
+#include "../model/tasks.h"
 
 // Which sensor cards the dashboard shows; a single one gets the full width.
 enum class ChartView { Both, Temperature, Humidity };
@@ -60,8 +61,20 @@ struct CalendarView {
   bool stale = false;               // No push for CALENDAR_STALE_MIN minutes
 };
 
+struct TasksView {
+  time_t now = 0;                   // Unix time; formatted with the local time zone
+  const TaskList *list = nullptr;   // Pending tasks, in display order
+  int selected = 0;                 // Index into `list`
+  bool hasData = false;             // Received at least one push from the PC
+  time_t lastUpdate = 0;
+  bool stale = false;               // No push for TASKS_STALE_MIN minutes
+};
+
 void uiDrawSplash(U8G2 &g, const char *message);
 void uiDrawDashboard(U8G2 &g, const DashboardState &s);
 
 // Header and footer status come from `s`; the clock is not drawn.
 void uiDrawCalendar(U8G2 &g, const DashboardState &s, const CalendarView &c);
+
+// Same header and footer; the selected task is highlighted.
+void uiDrawTasks(U8G2 &g, const DashboardState &s, const TasksView &t);

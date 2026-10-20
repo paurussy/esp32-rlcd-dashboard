@@ -5,7 +5,7 @@
 
 #include <Arduino.h>
 
-#include "date_time.h"
+#include "../model/date_time.h"
 
 // Returns true if WiFi credentials are configured in secrets.h.
 bool wifiConfigured();

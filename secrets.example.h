@@ -10,6 +10,12 @@
 #define WIFI_SSID     "your-ssid"
 #define WIFI_PASSWORD "your-password"
 
-// Shared secret sent by the PC calendar bridge (X-Token header).
-// Use the same value in tools/calendar-bridge/config.ini.
+// Shared secrets sent by the PC programs (X-Token header). Each one turns its
+// screen on: leave it out (or empty) and that feature is ignored.
+// Use the same values in pc/config.ini.
+
+// Teams/Outlook calendar (pc/calendar_bridge) and meeting beeps
 #define CALENDAR_TOKEN "change-me"
+
+// Task list page (pc/tasks_server)
+#define TASKS_TOKEN "change-me-too"

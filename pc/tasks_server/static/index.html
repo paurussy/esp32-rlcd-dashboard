@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Tasks</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f6f4f'/%3E%3Cpath d='M8 17l5 5 11-12' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #eef0ea; --surface: #ffffff; --ink: #1c211f; --muted: #66706b; --line: #dde1d9;
+    --accent: #2f6f4f; --accent-soft: #e1efe6; --accent-ink: #ffffff;
+    --high: #b4690e; --high-soft: #fbeedc;
+    --danger: #b3261e; --danger-soft: #fbe5e3;
+    --warn: #8a5a00; --warn-soft: #fbf0d3;
+    --shadow: 0 1px 2px rgba(20, 30, 25, .06), 0 4px 14px rgba(20, 30, 25, .05);
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #121514; --surface: #1c2120; --ink: #e8ece9; --muted: #94a09a; --line: #2d3532;
+      --accent: #6fbf94; --accent-soft: #1f3329; --accent-ink: #0e1d15;
+      --high: #f0b45f; --high-soft: #3a2d17;
+      --danger: #f2877f; --danger-soft: #3b1f1d;
+      --warn: #e3b25c; --warn-soft: #382e15;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 4px 14px rgba(0, 0, 0, .3);
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 680px; margin: 0 auto; padding: 24px 16px 96px; }
+  button, input { font: inherit; color: inherit; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+  /* ---------- header ---------- */
+  header { display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+  h1 { margin: 0; font-size: 1.75rem; letter-spacing: -.02em; line-height: 1.1; }
+  .count { color: var(--muted); font-size: .9rem; margin-top: 2px; }
+  .sync { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 99px; font-size: .82rem;
+          background: var(--surface); border: 1px solid var(--line); color: var(--muted); max-width: 100%; }
+  .sync .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+  .sync.ok .dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .sync.pending { background: var(--warn-soft); border-color: transparent; color: var(--warn); }
+  .sync.pending .dot { background: var(--warn); }
+  .sync.error { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
+  .sync.error .dot { background: var(--danger); }
+
+  /* ---------- composer ---------- */
+  .composer { display: flex; gap: 6px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+              box-shadow: var(--shadow); padding: 8px 8px 8px 12px; margin-bottom: 20px; }
+  .composer input[type=text] { flex: 1; min-width: 0; border: 0; background: transparent; padding: 10px 4px; font-size: 1.05rem; }
+  .composer input[type=text]:focus-visible { outline: none; }
+  .composer input[type=text]::placeholder { color: var(--muted); }
+  .add { background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 10px; padding: 10px 18px; font-weight: 600; }
+  .add:disabled { opacity: .45; cursor: default; }
+
+  /* ---------- list ---------- */
+  ul { list-style: none; margin: 0; padding: 0; }
+  .task { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
+          padding: 8px 8px 8px 12px; margin-bottom: 8px; box-shadow: var(--shadow); transition: opacity .2s, transform .2s; }
+  .task.leaving { opacity: 0; transform: translateX(12px); }
+  .task.high { border-left: 4px solid var(--high); padding-left: 9px; }
+  .check { appearance: none; -webkit-appearance: none; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--muted); flex: none; margin: 0; display: grid; place-items: center; cursor: pointer; background: transparent; }
+  .check:hover { border-color: var(--accent); }
+  .check:checked { background: var(--accent); border-color: var(--accent); }
+  .check:checked::after { content: ""; width: 6px; height: 11px; border: solid var(--accent-ink); border-width: 0 2.5px 2.5px 0; transform: translateY(-1px) rotate(45deg); }
+  .text { flex: 1; min-width: 0; background: none; border: 0; padding: 8px 0; text-align: left; overflow-wrap: anywhere; cursor: text; }
+  .done .text { text-decoration: line-through; color: var(--muted); cursor: default; }
+  .edit { flex: 1; min-width: 0; border: 1px solid var(--accent); border-radius: 8px; padding: 6px 8px; background: var(--bg); }
+  .icon-btn { border: 0; background: transparent; color: var(--muted); border-radius: 8px; width: 36px; height: 36px; display: grid; place-items: center; flex: none; }
+  .icon-btn:hover { background: var(--bg); color: var(--ink); }
+  .icon-btn[aria-pressed=true] { color: var(--high); background: var(--high-soft); }
+  .icon-btn[aria-pressed=true] svg { fill: currentColor; }
+  .icon-btn.trash:hover { color: var(--danger); }
+  .limit { margin: 16px 4px 10px; font-size: .8rem; color: var(--muted); display: flex; align-items: center; gap: 10px; }
+  .limit::before, .limit::after { content: ""; flex: 1; border-top: 1px dashed var(--line); }
+  .empty-state { text-align: center; color: var(--muted); padding: 36px 16px; background: var(--surface); border: 1px dashed var(--line); border-radius: var(--radius); }
+  .empty-state strong { display: block; color: var(--ink); font-size: 1.05rem; margin-bottom: 4px; }
+
+  /* ---------- done ---------- */
+  details { margin-top: 24px; }
+  summary { cursor: pointer; color: var(--muted); font-size: .92rem; padding: 6px 4px; display: flex; align-items: center; gap: 8px; list-style: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "▸"; font-size: .8em; transition: transform .15s; }
+  details[open] summary::before { transform: rotate(90deg); }
+  summary .clear { margin-left: auto; font-size: .82rem; color: var(--muted); background: none; border: 0; text-decoration: underline; padding: 2px 6px; }
+  summary .clear:hover { color: var(--danger); }
+  details ul { margin-top: 8px; }
+
+  /* ---------- toast ---------- */
+  #toast { position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 24px); opacity: 0; pointer-events: none; transition: .2s;
+           background: var(--ink); color: var(--bg); padding: 10px 14px 10px 16px; border-radius: 12px; display: flex; gap: 14px; align-items: center;
+           box-shadow: 0 8px 24px rgba(0, 0, 0, .25); max-width: calc(100vw - 32px); z-index: 10; }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
+  #toast span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #toast button { background: none; border: 0; color: var(--accent); font-weight: 700; padding: 2px 4px; }
+  @media (prefers-color-scheme: light) { #toast button { color: #8fd6ae; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4m0 0h11l-2 4 2 4H5"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
+</svg>
+
+<main>
+  <header>
+    <div>
+      <h1>Tasks</h1>
+      <div class="count" id="count"></div>
+    </div>
+    <div class="sync" id="sync" role="status"><span class="dot"></span><span id="sync-text">Loading…</span></div>
+  </header>
+
+  <form class="composer" id="composer" autocomplete="off">
+    <label class="sr-only" for="new-text">New task</label>
+    <input type="text" id="new-text" placeholder="Add a task…" maxlength="200" enterkeyhint="done">
+    <button type="button" class="icon-btn" id="new-high" aria-pressed="false" title="High priority" aria-label="High priority"><svg><use href="#i-flag"/></svg></button>
+    <button class="add" id="add" type="submit" disabled>Add</button>
+  </form>
+
+  <ul id="pending"></ul>
+
+  <details id="done-box" hidden>
+    <summary><span id="done-title">Done</span><button type="button" class="clear" id="clear-done">Clear all</button></summary>
+    <ul id="done"></ul>
+  </details>
+</main>
+
+<div id="toast" role="status" aria-live="polite"><span id="toast-text"></span><button type="button" id="toast-undo">Undo</button></div>
+
+<script>
+// Tasks the board can show (TASKS_MAX_ITEMS in config.h); the ones below the line wait for a free slot
+const BOARD_SLOTS = 20;
+const TOKEN_KEY = "tasks-web-token";
+const REFRESH_MS = 15000;
+
+const $ = (id) => document.getElementById(id);
+const state = { tasks: [], updatedAt: 0, board: null, editingId: null, high: false };
+
+// ---------- helpers ----------
+function el(tag, props = {}, ...children) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children);
+  return node;
+}
+function icon(name) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
+  use.setAttribute("href", "#i-" + name);
+  svg.append(use);
+  return svg;
+}
+const clock = (epoch) => new Date(epoch * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+function inMinutes(epoch) {
+  const min = Math.max(0, Math.round((epoch * 1000 - Date.now()) / 60000));
+  return min <= 0 ? "now" : min === 1 ? "in 1 min" : `in ${min} min`;
+}
+// Same order as the board: high priority first, then oldest first
+function boardOrder(list) {
+  return [...list].sort((a, b) => (b.high - a.high) || (a.created - b.created) || (a.id - b.id));
+}
+
+// ---------- API ----------
+async function api(method, path, body) {
+  const headers = {};
+  try { headers["X-Web-Token"] = localStorage.getItem(TOKEN_KEY) || ""; } catch { /* storage blocked */ }
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  const response = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  if (response.status === 401) {
+    const entered = prompt("Access token for this page:");
+    if (entered === null) throw new Error("Access token needed");
+    try { localStorage.setItem(TOKEN_KEY, entered); } catch { /* asked again next time */ }
+    return api(method, path, body);
+  }
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error || response.statusText);
+  return data;
+}
+
+async function load() {
+  const data = await api("GET", "/api/tasks");
+  Object.assign(state, { tasks: data.tasks, updatedAt: data.updated_at, board: data.board });
+  render();
+}
+
+// Runs a change, then refreshes; a failure shows in the toast and the list is reloaded as it really is
+async function act(change) {
+  try {
+    await change();
+  } catch (error) {
+    toast(error.message);
+  }
+  await load().catch((error) => toast(error.message));
+}
+
+// ---------- toast with undo ----------
+let toastTimer = 0, undoAction = null;
+function toast(message, undo = null) {
+  $("toast-text").textContent = message;
+  $("toast-undo").hidden = !undo;
+  undoAction = undo;
+  $("toast").classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $("toast").classList.remove("show"), undo ? 6000 : 3500);
+}
+$("toast-undo").addEventListener("click", () => {
+  const undo = undoAction;
+  undoAction = null;
+  $("toast").classList.remove("show");
+  if (undo) act(undo);
+});
+
+// ---------- rendering ----------
+function row(task) {
+  const check = el("input", { type: "checkbox", className: "check", checked: task.done,
+                              ariaLabel: task.done ? `Mark "${task.text}" as pending` : `Mark "${task.text}" as done` });
+  check.addEventListener("change", () => {
+    check.closest(".task").classList.add("leaving");
+    const done = check.checked;
+    act(() => api("PATCH", `/api/tasks/${task.id}`, { done })).then(() => {
+      if (done) toast(`Done: ${task.text}`, () => api("PATCH", `/api/tasks/${task.id}`, { done: false }));
+    });
+  });
+
+  let text;
+  if (task.id === state.editingId) {
+    text = el("input", { className: "edit", type: "text", value: task.text, maxLength: 200, ariaLabel: "Task text" });
+    const finish = (save) => {
+      if (state.editingId !== task.id) return;
+      state.editingId = null;
+      if (save && text.value.trim() && text.value.trim() !== task.text) act(() => api("PATCH", `/api/tasks/${task.id}`, { text: text.value }));
+      else render();
+    };
+    text.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") finish(true);
+      if (event.key === "Escape") finish(false);
+    });
+    text.addEventListener("blur", () => finish(true));
+    setTimeout(() => { text.focus(); text.select(); });
+  } else {
+    text = el("button", { type: "button", className: "text", title: task.done ? "" : "Click to edit" }, task.text);
+    if (!task.done) text.addEventListener("click", () => { state.editingId = task.id; render(); });
+  }
+
+  const flag = el("button", { type: "button", className: "icon-btn flag", ariaPressed: String(task.high),
+                              title: task.high ? "High priority" : "Mark as high priority", ariaLabel: "High priority" }, icon("flag"));
+  flag.addEventListener("click", () => act(() => api("PATCH", `/api/tasks/${task.id}`, { high: !task.high })));
+
+  const trash = el("button", { type: "button", className: "icon-btn trash", title: "Delete", ariaLabel: `Delete "${task.text}"` }, icon("trash"));
+  trash.addEventListener("click", () => {
+    const copy = { text: task.text, high: task.high };
+    act(() => api("DELETE", `/api/tasks/${task.id}`)).then(() => toast(`Deleted: ${task.text}`, () => api("POST", "/api/tasks", copy)));
+  });
+
+  return el("li", { className: "task" + (task.done ? " done" : "") + (task.high && !task.done ? " high" : "") },
+    check, text, ...(task.done ? [] : [flag]), trash);
+}
+
+function render() {
+  if (document.activeElement?.classList.contains("edit") && state.editingId !== null) return;  // Don't pull the field away while typing
+
+  const pending = boardOrder(state.tasks.filter((t) => !t.done));
+  const done = state.tasks.filter((t) => t.done).sort((a, b) => b.done_at - a.done_at);
+
+  $("count").textContent = pending.length === 0 ? "All clear" : `${pending.length} pending`;
+
+  const list = $("pending");
+  list.replaceChildren();
+  if (pending.length === 0) {
+    list.append(el("li", { className: "empty-state" }, el("strong", {}, "Nothing pending"), "Add a task above and it will show up on the board."));
+  }
+  pending.forEach((task, i) => {
+    if (i === BOARD_SLOTS) list.append(el("li", { className: "limit" }, `The board shows ${BOARD_SLOTS}; the rest wait for a free slot`));
+    list.append(row(task));
+  });
+
+  $("done-box").hidden = done.length === 0;
+  $("done-title").textContent = `Done (${done.length})`;
+  $("done").replaceChildren(...done.map(row));
+  renderSync();
+}
+
+function renderSync() {
+  const box = $("sync"), text = $("sync-text"), board = state.board;
+  if (!board) return;
+  let cls = "", message;
+  if (!board.enabled) {
+    message = "Page only · not syncing with the board";
+  } else if (board.error && !(board.delivered_at && board.delivered_at > state.updatedAt)) {
+    cls = " error";
+    message = `Board unreachable · next try ${inMinutes(board.next_window)} (${clock(board.next_window)})`;
+  } else if (board.delivered_at && state.updatedAt > board.delivered_at) {
+    cls = " pending";
+    message = `Changes reach the board ${inMinutes(board.next_window)} (${clock(board.next_window)})`;
+  } else if (board.delivered_at) {
+    cls = " ok";
+    message = `On the board · synced ${clock(board.delivered_at)}`;
+  } else if (state.tasks.length && board.next_window) {
+    cls = " pending";
+    message = `Not on the board yet · next sync ${inMinutes(board.next_window)} (${clock(board.next_window)})`;
+  } else {
+    message = board.next_window ? `Waiting for the board · next sync ${inMinutes(board.next_window)} (${clock(board.next_window)})` : "Waiting for the board";
+  }
+  box.className = "sync" + cls;
+  text.textContent = message;
+}
+
+// ---------- composer ----------
+$("new-high").addEventListener("click", () => {
+  state.high = !state.high;
+  $("new-high").setAttribute("aria-pressed", String(state.high));
+  $("new-text").focus();
+});
+$("new-text").addEventListener("input", () => { $("add").disabled = !$("new-text").value.trim(); });
+
+$("composer").addEventListener("submit", (event) => {
+  event.preventDefault();
+  const text = $("new-text").value.trim();
+  if (!text) return;
+  const body = { text, high: state.high };
+  $("new-text").value = "";
+  $("add").disabled = true;
+  state.high = false;
+  $("new-high").setAttribute("aria-pressed", "false");
+  act(() => api("POST", "/api/tasks", body));
+  $("new-text").focus();
+});
+
+$("clear-done").addEventListener("click", (event) => {
+  event.preventDefault();  // Don't toggle the <details>
+  const done = state.tasks.filter((t) => t.done);
+  if (!done.length) return;
+  act(async () => { for (const task of done) await api("DELETE", `/api/tasks/${task.id}`); });
+  toast(`Cleared ${done.length} done task${done.length === 1 ? "" : "s"}`);
+});
+
+// ---------- start ----------
+load().catch((error) => { $("sync").className = "sync error"; $("sync-text").textContent = error.message; });
+// Pick up what the board finished and keep the countdown fresh, unless something is being typed
+setInterval(() => { if (state.editingId === null && !$("new-text").value) load().catch(() => {}); else renderSync(); }, REFRESH_MS);
+setInterval(renderSync, 30000);
+</script>
+</body>
+</html>

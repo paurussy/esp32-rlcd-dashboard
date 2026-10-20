@@ -1,5 +1,5 @@
 /*
-  Arduino.h - Minimal host stub so src/ui.cpp builds on a PC
+  Arduino.h - Minimal host stub so src/ui/ builds on a PC
 */
 #pragma once
 

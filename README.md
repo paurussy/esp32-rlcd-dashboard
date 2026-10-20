@@ -14,10 +14,15 @@ Desk clock and indoor climate dashboard for the
 - Daily Teams/Outlook calendar: the meeting in progress and the next ones, with a
   beep 5 minutes before each meeting and another when it starts. A small PC
   program feeds it from Outlook (see [Teams calendar](#teams-calendar))
+- Pending tasks: a simple web page on your PC, synced with a tasks screen where
+  BOOT selects, finishes and deletes them (see [Tasks](#tasks))
+- Calendar and tasks are optional: each is turned on by its token in `secrets.h`
 
 ![Dashboard](docs/images/dashboard.png)
 
 ![Calendar](docs/images/calendar.png)
+
+![Tasks](docs/images/tasks.png)
 
 <details>
 <summary>Right after boot, clock not synced yet</summary>
@@ -44,27 +49,45 @@ Desk clock and indoor climate dashboard for the
 
 </details>
 
+<details>
+<summary>Tasks before the first push</summary>
+
+![No tasks yet](docs/images/tasks-empty.png)
+
+</details>
+
 ## Project layout
 
 ```
 esp32-rlcd-dashboard/
 ├── esp32-rlcd-dashboard.ino   # Entry point: setup(), loop(), app state
 ├── config.h                   # Pins, timings, thresholds, time zone
-├── secrets.example.h          # Template for secrets.h (WiFi credentials, calendar token)
-├── src/
-│   ├── st7305_u8g2.*          # ST7305 display driver exposed as a U8G2 object
-│   ├── shtc3.*                # SHTC3 temperature/humidity sensor driver
-│   ├── pcf85063.*             # PCF85063 RTC driver
-│   ├── speaker.*              # ES8311 codec + amplifier: beeps
-│   ├── battery.*              # Battery voltage and charge estimate
-│   ├── network.*              # WiFi connection and NTP time
-│   ├── calendar.*             # Today's meetings and their alerts (no hardware access)
-│   ├── calendar_server.*      # HTTP endpoint the PC bridge pushes to, mDNS
-│   ├── date_time.h            # DateTime struct and helpers
-│   ├── history.h              # Sample history for the charts
-│   └── ui.*                   # Screen rendering (no hardware access)
+├── secrets.example.h          # Template for secrets.h (WiFi credentials, tokens)
+├── src/                       # Firmware, by layer
+│   ├── drivers/               # Hardware: one driver per chip
+│   │   ├── st7305_u8g2.*      #   ST7305 display exposed as a U8G2 object
+│   │   ├── shtc3.*            #   SHTC3 temperature/humidity sensor
+│   │   ├── pcf85063.*         #   PCF85063 RTC
+│   │   ├── speaker.*          #   ES8311 codec + amplifier: beeps
+│   │   ├── battery.*          #   Battery voltage and charge estimate
+│   │   └── button.h           #   Debounced button: clicks and long presses
+│   ├── net/                   # WiFi and what comes over it
+│   │   ├── network.*          #   WiFi connection and NTP time
+│   │   └── push_server.*      #   HTTP endpoints the PC pushes to, mDNS
+│   ├── model/                 # Plain data and logic (no hardware access)
+│   │   ├── calendar.*         #   Today's meetings and their alerts
+│   │   ├── tasks.*            #   Pending tasks and what was done with them
+│   │   ├── history.h          #   Sample history for the charts
+│   │   ├── date_time.h        #   DateTime struct and helpers
+│   │   └── push_body.h        #   Parsing of the bodies the PC pushes
+│   └── ui/                    # Screen rendering (no hardware access)
+│       ├── ui.h               #   Public API: state structs and draw functions
+│       ├── common.*           #   Header, footer and text helpers
+│       └── dashboard.cpp, calendar_screen.cpp, tasks_screen.cpp
+├── pc/                        # Programs that run on the PC (see pc/README.md)
+│   ├── calendar_bridge/       #   Outlook calendar -> board
+│   └── tasks_server/          #   Task web page <-> board
 └── tools/
-    ├── calendar-bridge/       # PC program: Outlook calendar -> board
     └── screenshots/           # Renders the README images on a PC
 ```
 
@@ -73,9 +96,10 @@ esp32-rlcd-dashboard/
 ## Getting started
 
 1. Copy `secrets.example.h` to `secrets.h` and set your 2.4 GHz WiFi credentials
-   and, for the calendar, a `CALENDAR_TOKEN` (any long random string).
-   `secrets.h` is git-ignored.
-2. Review `config.h` (time zone, temperature offset, intervals, calendar...).
+   and, for the features that need a PC program, their tokens (any long random
+   string): `CALENDAR_TOKEN` for the calendar, `TASKS_TOKEN` for the tasks. Leave a
+   token out to turn that feature off. `secrets.h` is git-ignored.
+2. Review `config.h` (time zone, temperature offset, intervals...).
 3. Install the **U8g2** library (Library Manager).
 4. Open `esp32-rlcd-dashboard.ino` in Arduino IDE and select:
    - Board: **ESP32S3 Dev Module** (esp32 by Espressif >= 3.3.0)
@@ -97,20 +121,16 @@ The board can't sign in to a work Microsoft 365 account by itself: that would
 need an Azure app and, usually, admin consent. Instead, a small program on your
 PC reads the calendar from Outlook (the new Outlook's offline cache, or the
 classic app) and pushes today's meetings to the board over WiFi. See
-[`tools/calendar-bridge/`](tools/calendar-bridge/README.md) for the setup.
+[`pc/`](pc/README.md) and [`pc/calendar_bridge/`](pc/calendar_bridge/README.md) for the setup.
 
 - The calendar screen shows the meeting in progress (with time left and a
   progress bar) or the next one, followed by the rest of the day, up to 5 in total.
 - **Two short beeps** 5 minutes before a meeting (`CALENDAR_ALERT_EARLY_MIN`),
   and the screen switches to the calendar. **Three long beeps** when it starts.
-- **KEY** button (next to BOOT): switches between dashboard and calendar, or
-  silences a beep in progress. Dots in the header show the current page.
-- **BOOT** button, a different action on each screen:
-  - Calendar: mutes or unmutes the meeting beeps. While muted, a crossed-out
-    speaker shows in the header and a meeting still switches the screen to the
-    calendar, just without sound. Beeps come back by themselves the next day.
-  - Dashboard: cycles the charts: both, temperature only, humidity only (the
-    chosen one gets the full width and the other reading moves to its title).
+- On the calendar screen, **BOOT** mutes or unmutes the meeting beeps. While
+  muted, a crossed-out speaker shows in the header and a meeting still switches
+  the screen to the calendar, just without sound. Beeps come back by themselves
+  the next day. (All buttons are described in [Buttons](#buttons).)
 - When the last meeting of the day ends, the board goes back to the dashboard
   once (pressing KEY afterwards still shows the empty calendar).
 - Each push replaces all events with the latest version: deleted meetings
@@ -120,8 +140,37 @@ classic app) and pushes today's meetings to the board over WiFi. See
   warns after `CALENDAR_STALE_MIN` minutes without news from the PC.
 - The board only listens during its [WiFi windows](#power), so the PC pushes
   inside them (the scheduled task is aligned with them).
-- Set `CALENDAR_TOKEN` in `secrets.h`. The PC must send the same token.
-- Turned on with `CALENDAR_ENABLED` in `config.h`.
+- Turned on by `CALENDAR_TOKEN` in `secrets.h`; the PC must send the same token.
+  Without it there is no calendar screen and no meeting beeps.
+
+## Tasks
+
+A list of pending tasks so they don't get forgotten. You manage them on a simple
+web page that runs on your PC (open it from the phone too) and see them on the
+board's third screen. See [`pc/tasks_server/`](pc/tasks_server/README.md) for the
+setup and the page.
+
+- Each task has a text and a priority. High priority goes first (marked with a
+  bar), then the oldest first.
+- On the tasks screen **BOOT** works on the highlighted task: a click selects the
+  next one, a double click marks it as done and holding it for a second deletes it.
+  The page picks that up at the next push (done tasks stay under "Done" there).
+- The board shows up to 20 tasks (`TASKS_MAX_ITEMS`), kept in RAM. The footer
+  warns after `TASKS_STALE_MIN` minutes without news from the PC.
+- Like the calendar, tasks travel only inside the board's [WiFi windows](#power),
+  so a change on the page reaches the board within 15 minutes.
+- Turned on by `TASKS_TOKEN` in `secrets.h`; the PC must send the same token.
+
+## Buttons
+
+| Button | Dashboard | Calendar | Tasks |
+| ------ | --------- | -------- | ----- |
+| **KEY** | Next screen | Next screen (or silences a beep) | Next screen |
+| **BOOT** | Cycles the charts: both, temperature only, humidity only | Mutes / unmutes the beeps | Click: select next. Double click: done. Hold: delete |
+
+With a single screen (no calendar and no tasks token) KEY does nothing. BOOT is
+only special while the chip resets: held during a reset it enters download mode
+(see Troubleshooting).
 
 ## Power
 
@@ -134,9 +183,9 @@ There is a single, efficient mode (no switch to turn it on):
 - **Bluetooth**: never started.
 - **WiFi**: off, except in a window that opens at minute :59, :14, :29 and :44
   and closes at :01, :16, :31 and :46 (`WIFI_WINDOW_*` in `config.h`). In a
-  window the board connects, listens for the PC's calendar push and, if the
-  last sync is about an hour old, re-syncs the clock via NTP (the :59 window).
-  It switches WiFi off as soon as the calendar arrives. If a clock sync fails,
+  window the board connects, listens for the PC's pushes (calendar and tasks) and,
+  if the last sync is about an hour old, re-syncs the clock via NTP (the :59
+  window). It switches WiFi off as soon as everything enabled has arrived. If a clock sync fails,
   WiFi is switched on again just for it every `NTP_RETRY_MIN` (5) minutes,
   also outside the windows, until it works. The WiFi icon only shows while
   actually connected.
@@ -195,7 +244,7 @@ Also make sure no serial monitor (e.g. Arduino IDE) has the port open.
 
 ## Screenshots
 
-The images above are rendered from the real `src/ui.cpp` on a PC, so they match
+The images above are rendered from the real `src/ui/` on a PC, so they match
 the device pixel for pixel. To regenerate them after a UI change (Linux, macOS
 or WSL, with `gcc`/`g++`):
 

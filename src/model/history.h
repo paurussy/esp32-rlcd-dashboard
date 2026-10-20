@@ -9,7 +9,7 @@
 
 #include <string.h>
 
-#include "../config.h"
+#include "../../config.h"
 
 struct History {
   // Oldest sample first, newest at index count - 1
