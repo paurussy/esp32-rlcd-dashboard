@@ -1,0 +1,18 @@
+# Local credentials
+secrets.h
+
+# Build output
+build/
+*.bin
+*.elf
+*.map
+
+# PlatformIO
+.pio/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
