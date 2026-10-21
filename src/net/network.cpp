@@ -16,11 +16,12 @@ struct KnownAp {
   int32_t channel = 0;
 } g_knownAp;
 
-bool waitConnected(uint32_t timeoutMs)
+bool waitConnected(uint32_t timeoutMs, IdleHook idle)
 {
   uint32_t start = millis();
   while (!wifiConnected() && millis() - start < timeoutMs) {
     delay(100);
+    if (idle) idle();
   }
   return wifiConnected();
 }
@@ -32,7 +33,7 @@ bool wifiConfigured()
   return strlen(WIFI_SSID) > 0;
 }
 
-bool wifiConnect(uint32_t timeoutMs)
+bool wifiConnect(uint32_t timeoutMs, IdleHook idle)
 {
   if (!wifiConfigured()) return false;
 
@@ -42,7 +43,7 @@ bool wifiConnect(uint32_t timeoutMs)
 
   if (g_knownAp.valid) {
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD, g_knownAp.channel, g_knownAp.bssid);
-    if (waitConnected(timeoutMs / 2)) {
+    if (waitConnected(timeoutMs / 2, idle)) {
       WiFi.setSleep(WIFI_PS_MAX_MODEM);  // Radio sleeps between beacons while waiting for the PC
       return true;
     }
@@ -51,7 +52,7 @@ bool wifiConnect(uint32_t timeoutMs)
   }
 
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  if (!waitConnected(timeoutMs)) return false;
+  if (!waitConnected(timeoutMs, idle)) return false;
 
   g_knownAp.channel = WiFi.channel();
   memcpy(g_knownAp.bssid, WiFi.BSSID(), sizeof(g_knownAp.bssid));
@@ -71,7 +72,7 @@ void wifiOff()
   WiFi.mode(WIFI_OFF);
 }
 
-bool ntpFetchLocalTime(DateTime &out, uint32_t timeoutMs)
+bool ntpFetchLocalTime(DateTime &out, uint32_t timeoutMs, IdleHook idle)
 {
   if (!wifiConnected()) return false;
 
@@ -82,7 +83,12 @@ bool ntpFetchLocalTime(DateTime &out, uint32_t timeoutMs)
   configTzTime(TIMEZONE, NTP_SERVER_PRIMARY, NTP_SERVER_SECONDARY);
 
   struct tm t;
-  bool ok = getLocalTime(&t, timeoutMs);
+  bool ok = getLocalTime(&t, 0);
+  for (uint32_t start = millis(); !ok && millis() - start < timeoutMs;) {
+    delay(100);
+    if (idle) idle();
+    ok = getLocalTime(&t, 0);
+  }
   esp_sntp_stop();  // No background polling: the next sync is on demand
   if (!ok) return false;
 
