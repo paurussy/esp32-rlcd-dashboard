@@ -157,7 +157,8 @@ setup and the page.
 - The board shows up to 20 tasks (`TASKS_MAX_ITEMS`), kept in RAM. The footer
   warns after `TASKS_STALE_MIN` minutes without news from the PC.
 - Like the calendar, tasks travel only inside the board's [WiFi windows](#power),
-  so a change on the page reaches the board within 15 minutes.
+  so a change on the page reaches the board within 15 minutes (between 08:00 and
+  17:00; changes made outside those hours arrive in the first window of the morning).
 - Turned on by `TASKS_TOKEN` in `secrets.h`; the PC must send the same token.
 
 ## Buttons
@@ -177,18 +178,25 @@ There is a single, efficient mode (no switch to turn it on):
 
 - **Screen**: redrawn once per minute, right after the minute changes (no
   seconds on the clock), and immediately when KEY is pressed.
-- **CPU**: runs at 80 MHz (`CPU_FREQ_MHZ`) and light-sleeps between refreshes;
-  the reflective LCD keeps the image without power. KEY wakes it up.
+- **CPU**: runs at 80 MHz (`CPU_FREQ_MHZ`) and light-sleeps between refreshes.
+  KEY wakes it up.
+- **Screen**: the reflective LCD keeps the image between refreshes; the ST7305
+  is in its low power mode then and only switches to high power while a frame
+  is written.
 - **Bluetooth**: never started.
 - **WiFi**: off, except in a window that opens at minute :59, :14, :29 and :44
-  and closes at :01, :16, :31 and :46 (`WIFI_WINDOW_*` in `config.h`). In a
-  window the board connects, listens for the PC's pushes (calendar and tasks) and,
-  if the last sync is about an hour old, re-syncs the clock via NTP (the :59
-  window). It switches WiFi off as soon as everything enabled has arrived. If a clock sync fails,
-  WiFi is switched on again just for it every `NTP_RETRY_MIN` (5) minutes,
-  also outside the windows, until it works. The WiFi icon only shows while
-  actually connected.
-- **Audio**: the speaker codec and I2S are only powered while a beep plays.
+  and closes at :01, :16, :31 and :46 (`WIFI_WINDOW_*` in `config.h`), and only
+  between 08:00 and 17:00 (`WIFI_ACTIVE_*`: the first window opens at 07:59, the
+  last one closes at 16:46). In a window the board connects, listens for the PC's
+  pushes (calendar and tasks) and, if the last sync is about an hour old,
+  re-syncs the clock via NTP (the first window of the morning, then the :59
+  ones). It switches WiFi off as soon as everything enabled has arrived, or
+  `WIFI_WINDOW_IDLE_SEC` (45 s) after opening if the PC pushes nothing. If a
+  clock sync fails, WiFi is switched on again just for it within the active hours,
+  after 5 minutes at first and then every 10, 20, 40 and 60 (`NTP_RETRY_*`),
+  until it works. The WiFi icon only shows while actually connected.
+- **Audio**: the speaker codec and I2S are only powered while a beep plays;
+  the codec and amplifier are powered down the rest of the time.
 - The temperature sensor, battery and chart are sampled once a minute. With the
   board no longer running hot all the time, `TEMP_OFFSET_C` was lowered to
   -1.5 as an estimate: **calibrate it** against a trusted thermometer.

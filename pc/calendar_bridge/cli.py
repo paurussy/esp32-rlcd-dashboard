@@ -23,7 +23,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 
-from rlcd.board import push_in_window, window_bounds
+from rlcd.board import in_active_hours, push_in_window, window_bounds
 from rlcd.config import load_config
 from rlcd.logs import setup_logging
 
@@ -70,6 +70,13 @@ def main() -> None:
         sys.exit("[esp32] token is not set in config.ini: it must match CALENDAR_TOKEN in the board's secrets.h.")
 
     while True:
+        if args.once:
+            now = datetime.now()
+            opens, _ = window_bounds(now)
+            # Scheduled run at night: nobody is listening (the 07:58:40 run is just before the first window)
+            if not in_active_hours(now) and (opens - now).total_seconds() > 60:
+                log.info("Outside the board's active hours: nothing to push")
+                return
         if not args.once:  # Resident: wake up so that Outlook is read right when the window opens
             opens, _ = window_bounds(datetime.now())
             read_lead = timedelta(seconds=cfg.getint("read_lead_s", 40))  # Reading takes ~20 s

@@ -36,7 +36,8 @@ if (-not (Test-Path $configPath)) {
 # The programs are Python packages, run with -m from this folder
 $action = New-ScheduledTaskAction -Execute $pythonw -Argument "-m calendar_bridge --once" -WorkingDirectory $PSScriptRoot
 # The board's WiFi window opens at :59, :14, :29, :44 (WIFI_WINDOW_* in config.h) and the
-# Outlook read takes ~20 s: start at :58:40 on the same 15 min grid. No sign-in trigger and no
+# Outlook read takes ~20 s: start at :58:40 on the same 15 min grid. Outside the board's active
+# hours (08:00-17:00) the program exits at once without reading Outlook. No sign-in trigger and no
 # StartWhenAvailable: a late run would fall outside the window.
 # The start is a fixed point on that grid (midnight + 13:40), not the time of this install: the
 # repetition keeps counting from it, so runs always land on :13:40, :28:40, :43:40 and :58:40.

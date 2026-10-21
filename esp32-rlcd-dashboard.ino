@@ -66,14 +66,16 @@ static Screen screen = Screen::Dashboard;
 static bool rtcTimeInvalid = false;  // RTC lost power; showing compile time
 static bool timeSynced = false;      // NTP succeeded at least once
 static time_t lastNtpEpoch = 0;      // When (RTC time) it last did
-static bool ntpFailed = false;       // Last attempt failed: retry every NTP_RETRY_MIN
-static time_t ntpAttemptEpoch = 0;   // When it was made
+static bool ntpFailed = false;       // Last attempt failed: retry with growing waits
+static uint8_t ntpFailures = 0;      // Failed attempts in a row
+static time_t ntpAttemptEpoch = 0;   // When the last one was made
 
 static bool windowOpen = false;      // WiFi up and listening for the PC
 static bool calendarServed = false;  // Received in this window
 static bool tasksServed = false;
 static bool windowServed = false;    // Everything enabled received in this window: don't reopen
 static uint32_t closeAtMs = 0;       // Pending close after a push (0 = none)
+static uint32_t windowActivityMs = 0;  // Window opened, or last push received
 
 static int lastMinute = -1;          // Minute of the last RTC reading handled
 static uint32_t lastClockPollMs = 0;
@@ -112,11 +114,20 @@ static void readSensors()
   battery.update();
 }
 
+// Wait before the next retry: NTP_RETRY_MIN after the first failure, doubling with
+// each one up to NTP_RETRY_MAX_MIN.
+static uint32_t ntpRetryMin()
+{
+  const uint32_t shift = ntpFailures > 1 ? min<uint32_t>(ntpFailures - 1, 8) : 0;
+  return min<uint32_t>(NTP_RETRY_MIN << shift, NTP_RETRY_MAX_MIN);
+}
+
 static void noteNtpAttempt(bool ok)
 {
   ntpFailed = !ok;
+  ntpFailures = ok ? 0 : min<int>(ntpFailures + 1, 16);
   ntpAttemptEpoch = nowEpoch();
-  if (!ok) Serial.printf("[ntp] Sync failed, retrying in %lu min\n", static_cast<unsigned long>(NTP_RETRY_MIN));
+  if (!ok) Serial.printf("[ntp] Sync failed, retrying in %lu min\n", static_cast<unsigned long>(ntpRetryMin()));
 }
 
 // Fetches the time from NTP and stores it in the RTC.
@@ -159,12 +170,22 @@ static void initRtc()
 // ============================================================
 //                         WIFI WINDOWS
 // ============================================================
-// True in the minutes of a window: the ones just before and after each
-// multiple of WIFI_WINDOW_PERIOD_MIN (:59 and :00, :14 and :15, ...).
-static bool windowActiveAt(uint8_t minute)
+// Whether WiFi is allowed at all at this time of day.
+static bool inActiveHours(const DateTime &t)
 {
-  return (minute + WIFI_WINDOW_OPEN_BEFORE_MIN) % WIFI_WINDOW_PERIOD_MIN <
-         WIFI_WINDOW_OPEN_BEFORE_MIN + WIFI_WINDOW_CLOSE_AFTER_MIN;
+  return t.hour >= WIFI_ACTIVE_FROM_HOUR && t.hour < WIFI_ACTIVE_UNTIL_HOUR;
+}
+
+// True in the minutes of a window: the ones just before and after each
+// multiple of WIFI_WINDOW_PERIOD_MIN (:59 and :00, :14 and :15, ...), for the
+// slots within the active hours.
+static bool windowActiveAt(const DateTime &t)
+{
+  const uint32_t shifted = t.hour * 60U + t.minute + WIFI_WINDOW_OPEN_BEFORE_MIN;
+  if (shifted % WIFI_WINDOW_PERIOD_MIN >= WIFI_WINDOW_OPEN_BEFORE_MIN + WIFI_WINDOW_CLOSE_AFTER_MIN) return false;
+
+  const uint32_t slot = shifted - shifted % WIFI_WINDOW_PERIOD_MIN;  // Minute of the day
+  return slot >= WIFI_ACTIVE_FROM_HOUR * 60U && slot < WIFI_ACTIVE_UNTIL_HOUR * 60U;
 }
 
 // Whether the clock needs a sync in this window. Windows are a period apart, so
@@ -179,11 +200,12 @@ static bool ntpDue()
          static_cast<time_t>(NTP_RESYNC_MIN * 60);
 }
 
-// A failed sync is retried every NTP_RETRY_MIN minutes, window or not.
+// A failed sync is retried after a growing wait (see ntpRetryMin), window or not,
+// but only within the active hours.
 static bool ntpRetryDue()
 {
-  return rtc.isPresent() && ntpFailed &&
-         nowEpoch() - ntpAttemptEpoch >= static_cast<time_t>(NTP_RETRY_MIN * 60);
+  return rtc.isPresent() && ntpFailed && inActiveHours(currentTime) &&
+         nowEpoch() - ntpAttemptEpoch >= static_cast<time_t>(ntpRetryMin() * 60);
 }
 
 static void closeWindow()
@@ -206,6 +228,7 @@ static void openWindow()
     return;
   }
   windowOpen = true;
+  windowActivityMs = millis();
   if (PUSH_ENABLED) pushServerStart();
 
   if (ntpDue()) syncTimeFromNtp();
@@ -228,7 +251,7 @@ static void retryNtpOnly()
 // Opens the window when it starts and closes it when it ends.
 static void manageWindow()
 {
-  if (!windowActiveAt(currentTime.minute)) {
+  if (!windowActiveAt(currentTime)) {
     windowServed = calendarServed = tasksServed = false;
     if (windowOpen) closeWindow();
     else if (ntpRetryDue()) retryNtpOnly();
@@ -281,7 +304,7 @@ static void drawCalendar()
   c.count = calendar.upcoming(c.now, c.events, CALENDAR_VISIBLE_EVENTS);
   c.hasData = calendar.hasData();
   c.lastUpdate = calendar.lastUpdate();
-  c.stale = c.hasData && c.now - c.lastUpdate > static_cast<time_t>(CALENDAR_STALE_MIN * 60);
+  c.stale = c.hasData && inActiveHours(currentTime) && c.now - c.lastUpdate > static_cast<time_t>(CALENDAR_STALE_MIN * 60);
 
   uiDrawCalendar(lcd.u8g2(), dashboardState(), c);
 }
@@ -294,7 +317,7 @@ static void drawTasks()
   t.selected = taskSelected;
   t.hasData = tasks.hasData();
   t.lastUpdate = tasks.lastUpdate();
-  t.stale = t.hasData && t.now - t.lastUpdate > static_cast<time_t>(TASKS_STALE_MIN * 60);
+  t.stale = t.hasData && inActiveHours(currentTime) && t.now - t.lastUpdate > static_cast<time_t>(TASKS_STALE_MIN * 60);
 
   uiDrawTasks(lcd.u8g2(), dashboardState(), t);
 }
@@ -447,7 +470,9 @@ void setup()
   battery.begin();
   bootButton.begin();
   if (PAGE_COUNT > 1) keyButton.begin();
-  if (CALENDAR_ENABLED && !speaker.begin(AUDIO_SAMPLE_RATE, BEEP_FREQ_HZ, BEEP_VOLUME_PCT)) {
+  if (!CALENDAR_ENABLED) {
+    speaker.shutdown();  // Never used: keep the amplifier and codec from drawing power
+  } else if (!speaker.begin(AUDIO_SAMPLE_RATE, BEEP_FREQ_HZ, BEEP_VOLUME_PCT)) {
     Serial.println("[audio] ES8311 not detected");
   }
 
@@ -465,9 +490,10 @@ void setup()
   }
 
   // Booted inside a window: stay up for the PC. Otherwise radio off until the next one.
-  if (PUSH_ENABLED && wifiConnected() && windowActiveAt(currentTime.minute)) {
+  if (PUSH_ENABLED && wifiConnected() && windowActiveAt(currentTime)) {
     pushServerStart();
     windowOpen = true;
+    windowActivityMs = millis();
   } else {
     wifiOff();
   }
@@ -537,6 +563,7 @@ void loop()
     const uint32_t selectedId = taskSelected < tasks.count() ? tasks.at(taskSelected).id : 0;
     const uint8_t pushed = pushServerLoop();
     if (pushed != 0) {
+      windowActivityMs = millis();
       rtc.read(currentTime);
       if (pushed & PUSH_CALENDAR) {
         checkCalendarAlerts();
@@ -556,6 +583,11 @@ void loop()
   if (closeAtMs != 0 && static_cast<int32_t>(millis() - closeAtMs) >= 0) {
     closeWindow();
     redraw = true;  // The WiFi icon goes away
+  } else if (windowOpen && closeAtMs == 0 && millis() - windowActivityMs >= WIFI_WINDOW_IDLE_SEC * 1000UL) {
+    Serial.println("[wifi] No push from the PC, closing the window");
+    windowServed = true;  // Do not reopen it in the next minute of this window
+    closeWindow();
+    redraw = true;
   }
 
   const uint32_t now = millis();
