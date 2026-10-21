@@ -2,7 +2,7 @@
   calendar.h - Today's meetings pushed by the PC bridge, and their beep alerts
   ----------------------------------------------------------------------------
   No hardware access: the sketch feeds it the body of each push and asks it,
-  once per second, whether an alert is due.
+  once per minute, whether an alert is due.
 
   Push format (UTF-8 text, one record per line, fields separated by tabs):
     v1    <pc_now_epoch>
