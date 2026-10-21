@@ -5,7 +5,7 @@
 namespace {
 
 // Typical resting discharge curve of an 18650 Li-ion cell (voltage -> %)
-constexpr float CURVE_V[]   = {3.30f, 3.50f, 3.68f, 3.74f, 3.77f, 3.79f, 3.82f, 3.87f, 3.92f, 3.98f, 4.06f, 4.15f};
+constexpr float CURVE_V[]   = {3.27f, 3.61f, 3.69f, 3.73f, 3.77f, 3.80f, 3.84f, 3.87f, 3.95f, 4.02f, 4.08f, 4.20f};
 constexpr int   CURVE_PCT[] = {    0,     5,    10,    20,    30,    40,    50,    60,    70,    80,    90,   100};
 constexpr int   CURVE_POINTS = sizeof(CURVE_V) / sizeof(CURVE_V[0]);
 
@@ -25,7 +25,7 @@ void Battery::update()
   for (int i = 0; i < BATTERY_ADC_SAMPLES; i++) {
     sum += analogReadMilliVolts(_pin);
   }
-  float raw = (sum / BATTERY_ADC_SAMPLES) * BATTERY_DIVIDER_RATIO / 1000.0f;
+  float raw = static_cast<float>(sum) / BATTERY_ADC_SAMPLES * BATTERY_DIVIDER_RATIO / 1000.0f;
 
   // Exponential moving average keeps the percentage from jittering
   bool firstReading = _voltage < 0.1f;

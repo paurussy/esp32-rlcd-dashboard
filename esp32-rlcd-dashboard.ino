@@ -77,7 +77,8 @@ static bool windowServed = false;    // Everything enabled received in this wind
 static uint32_t closeAtMs = 0;       // Pending close after a push (0 = none)
 static uint32_t windowActivityMs = 0;  // Window opened, or last push received
 
-static int lastMinute = -1;          // Minute of the last RTC reading handled
+static bool booted = false;          // setup() finished: the screen can be redrawn
+static int lastMinute = -1;         // Minute of the last RTC reading handled
 static uint32_t lastClockPollMs = 0;
 
 static ChartView chartView = ChartView::Both;
@@ -91,6 +92,9 @@ static Button bootButton(PIN_BUTTON_BOOT);  // Per-screen action: chart view / m
 constexpr uint32_t CLOCK_POLL_MS = 250;
 // Lets the HTTP response of the push reach the PC before the radio goes off
 constexpr uint32_t CLOSE_DELAY_MS = 500;
+
+// Serves the buttons (and redraws) while WiFi or NTP is being waited for.
+static void serviceButtonsWhileBusy();
 
 // ============================================================
 //                          HELPERS
@@ -111,7 +115,8 @@ static void readSensors()
     humidityPct = h;
   }
   rtc.read(currentTime);
-  battery.update();
+  // The radio's current peaks sag the cell: a reading then would understate the charge
+  if (!wifiConnected()) battery.update();
 }
 
 // Wait before the next retry: NTP_RETRY_MIN after the first failure, doubling with
@@ -136,7 +141,7 @@ static bool syncTimeFromNtp()
   if (!rtc.isPresent()) return false;
 
   DateTime t;
-  if (!ntpFetchLocalTime(t, NTP_RESPONSE_TIMEOUT_MS)) {
+  if (!ntpFetchLocalTime(t, NTP_RESPONSE_TIMEOUT_MS, serviceButtonsWhileBusy)) {
     Serial.println("[ntp] No response from time server");
     noteNtpAttempt(false);
     return false;
@@ -221,7 +226,7 @@ static void openWindow()
 {
   if (!PUSH_ENABLED && !ntpDue()) return;
 
-  if (!wifiConnect(WIFI_CONNECT_TIMEOUT_MS)) {
+  if (!wifiConnect(WIFI_CONNECT_TIMEOUT_MS, serviceButtonsWhileBusy)) {
     Serial.println("[wifi] Could not connect, trying again in the next window");
     wifiOff();
     if (ntpDue()) noteNtpAttempt(false);
@@ -241,7 +246,7 @@ static void openWindow()
 // Radio on just long enough to retry a failed clock sync.
 static void retryNtpOnly()
 {
-  if (wifiConnect(WIFI_CONNECT_TIMEOUT_MS)) syncTimeFromNtp();
+  if (wifiConnect(WIFI_CONNECT_TIMEOUT_MS, serviceButtonsWhileBusy)) syncTimeFromNtp();
   else noteNtpAttempt(false);
   wifiOff();
   rtc.read(currentTime);
@@ -419,6 +424,28 @@ static void handleBoot(Gesture gesture)
   }
 }
 
+// Reads both buttons; true if one did something that needs a redraw.
+static bool serviceButtons()
+{
+  bool changed = false;
+  if (PAGE_COUNT > 1 && keyButton.pressed()) {
+    handleKey();
+    changed = true;
+  }
+  const Gesture gesture = bootButton.poll(false);
+  if (gesture != Gesture::None) {
+    handleBoot(gesture);
+    changed = true;
+  }
+  return changed;
+}
+
+static void serviceButtonsWhileBusy()
+{
+  if (!booted) return;  // Splash still up: a latched press is served once the loop runs
+  if (serviceButtons()) drawScreen();
+}
+
 static void printSummary()
 {
   Serial.println();
@@ -468,6 +495,8 @@ void setup()
   }
   initRtc();
   battery.begin();
+  battery.update();  // Before WiFi starts: the radio sags the cell
+  rtc.read(currentTime);  // So a failed NTP attempt below is timestamped with the real time
   bootButton.begin();
   if (PAGE_COUNT > 1) keyButton.begin();
   if (!CALENDAR_ENABLED) {
@@ -481,8 +510,7 @@ void setup()
     syncTimeFromNtp();
   } else {
     Serial.println("[wifi] Could not connect");
-    rtc.read(currentTime);
-    noteNtpAttempt(false);
+    if (wifiConfigured()) noteNtpAttempt(false);  // Without credentials there is nothing to retry
   }
   readSensors();
   if (PUSH_ENABLED && wifiConfigured()) {
@@ -503,6 +531,7 @@ void setup()
 
   printSummary();
   drawScreen();
+  booted = true;
   if (CALENDAR_ENABLED && BEEP_ON_BOOT) speaker.beep(BeepPattern::Test);
 }
 
@@ -515,7 +544,11 @@ static esp_sleep_wakeup_cause_t sleepUntilNextMinute()
   Serial.flush();
   lcd.holdPins(true);
   esp_sleep_enable_timer_wakeup(sleepMs * 1000ULL);
+  bootButton.armWake();
+  if (PAGE_COUNT > 1) keyButton.armWake();
   esp_light_sleep_start();
+  bootButton.afterWake();
+  if (PAGE_COUNT > 1) keyButton.afterWake();
   lcd.holdPins(false);
   return esp_sleep_get_wakeup_cause();
 }
@@ -547,15 +580,7 @@ void loop()
 
   if (!mustStayAwake()) timerWake = sleepUntilNextMinute() == ESP_SLEEP_WAKEUP_TIMER;
 
-  if (PAGE_COUNT > 1 && keyButton.pressed()) {
-    handleKey();
-    redraw = true;
-  }
-  const Gesture gesture = bootButton.poll(false);
-  if (gesture != Gesture::None) {
-    handleBoot(gesture);
-    redraw = true;
-  }
+  if (serviceButtons()) redraw = true;
 
   // Once everything enabled has arrived the window ends shortly after; alerts that
   // a push brings are not left to the next minute
