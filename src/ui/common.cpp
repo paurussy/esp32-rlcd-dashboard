@@ -30,7 +30,8 @@ void drawMutedIcon(U8G2 &g, int x, int y)
   g.drawLine(x + 12, y + 10, x + 18, y + 4);
 }
 
-// Horizontal battery filled proportionally to `pct`, drawn in the current color.
+// Horizontal battery filled proportionally to `pct`, for the header (draw color 0 on the
+// black bar). Leaves the draw color at 0.
 void drawBatteryIcon(U8G2 &g, int x, int y, int pct, bool bolt)
 {
   g.drawFrame(x, y, 27, 14);
@@ -39,12 +40,14 @@ void drawBatteryIcon(U8G2 &g, int x, int y, int pct, bool bolt)
   if (fill > 0) g.drawBox(x + 2, y + 2, fill, 10);
 
   if (bolt) {
-    // XOR so the bolt is visible over both the fill and the background
+    // One span per row, so no pixel is drawn twice (XOR would erase it). XOR keeps
+    // the bolt visible over both the fill and the background.
+    constexpr int8_t SPANS[10][2] = {{14, 16}, {13, 15}, {12, 14}, {11, 13}, {10, 16},
+                                     {10, 16}, {13, 15}, {12, 14}, {11, 13}, {10, 12}};
     g.setDrawColor(2);
-    g.drawLine(x + 15, y + 2, x + 10, y + 7);
-    g.drawLine(x + 10, y + 7, x + 16, y + 7);
-    g.drawLine(x + 16, y + 7, x + 11, y + 12);
-    g.drawLine(x + 16, y + 2, x + 11, y + 7);
+    for (int row = 0; row < 10; row++) {
+      g.drawHLine(x + SPANS[row][0], y + 2 + row, SPANS[row][1] - SPANS[row][0] + 1);
+    }
     g.setDrawColor(0);
   }
 }
