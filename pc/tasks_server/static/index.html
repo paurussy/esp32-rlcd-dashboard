@@ -64,7 +64,7 @@
   /* ---------- list ---------- */
   ul { list-style: none; margin: 0; padding: 0; }
   .task { display: flex; align-items: center; gap: 10px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
-          padding: 8px 8px 8px 12px; margin-bottom: 8px; box-shadow: var(--shadow); transition: opacity .2s, transform .2s; }
+          padding: 8px 8px 8px 12px; margin-bottom: 8px; box-shadow: var(--shadow); transition: opacity .2s, transform .2s cubic-bezier(.2, .8, .2, 1); }
   .task.leaving { opacity: 0; transform: translateX(12px); }
   .task.high { border-left: 4px solid var(--high); padding-left: 9px; }
   .check { appearance: none; -webkit-appearance: none; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--muted); flex: none; margin: 0; display: grid; place-items: center; cursor: pointer; background: transparent; }
@@ -80,7 +80,9 @@
   .icon-btn[aria-pressed=true] svg { fill: currentColor; }
   .icon-btn.trash:hover { color: var(--danger); }
   .grip { cursor: grab; touch-action: none; width: 28px; margin-left: -6px; }
-  .task.dragging { opacity: .85; box-shadow: 0 8px 24px rgba(0, 0, 0, .22); border-color: var(--accent); position: relative; z-index: 2; }
+  .task.dragging { box-shadow: 0 10px 28px rgba(0, 0, 0, .25); border-color: var(--accent); position: relative; z-index: 2;
+                   transition: box-shadow .15s; will-change: transform; }
+  .task.dragging.dropping { transition: transform .18s cubic-bezier(.2, .8, .2, 1), box-shadow .18s; box-shadow: var(--shadow); }
   body.dragging, body.dragging * { cursor: grabbing !important; user-select: none; }
   .limit { margin: 16px 4px 10px; font-size: .8rem; color: var(--muted); display: flex; align-items: center; gap: 10px; }
   .limit::before, .limit::after { content: ""; flex: 1; border-top: 1px dashed var(--line); }
@@ -282,36 +284,84 @@ function grip(li, task) {
   const handle = el("button", { type: "button", className: "icon-btn grip", title: "Drag to reorder",
                                 ariaLabel: `Reorder "${task.text}" (arrow keys move it)` }, icon("grip"));
 
+  // The rows are not moved in the DOM while dragging (that would drop the pointer
+  // capture): the dragged one follows the pointer with a transform, the ones it
+  // passes slide out of the way, and the order is committed when it is dropped.
   handle.addEventListener("pointerdown", (event) => {
     if (event.button !== 0) return;
     event.preventDefault();
     handle.setPointerCapture(event.pointerId);
+
+    const rows = [...$("pending").querySelectorAll("li.task")];
+    const from = rows.indexOf(li);
+    const box = (row) => { const r = row.getBoundingClientRect(); return { top: r.top + scrollY, bottom: r.bottom + scrollY, h: r.height }; };
+    const slots = rows.map(box);  // Where every row starts, in page coordinates
+    const gap = slots.length > 1 ? slots[1].top - slots[0].bottom : 8;
+    const lift = slots[from].h + gap;
+    const startY = event.clientY + scrollY;
+    const minOffset = slots[0].top - slots[from].top;
+    const maxOffset = slots[slots.length - 1].bottom - slots[from].bottom;
+    let clientY = event.clientY, to = from, scroller = 0;
+
     state.dragging = true;
     li.classList.add("dragging");
     document.body.classList.add("dragging");
 
-    const move = (e) => {
-      const rows = [...$("pending").querySelectorAll("li.task")].filter((r) => r !== li);
-      const before = rows.find((r) => {
-        const box = r.getBoundingClientRect();
-        return e.clientY < box.top + box.height / 2;
+    const offset = () => Math.min(Math.max(clientY + scrollY - startY, minOffset), maxOffset);
+    const update = () => {
+      const dy = offset();
+      li.style.transform = `translateY(${dy}px) scale(1.02)`;
+      // The slot is the one whose middle the dragged row's middle has passed
+      const middle = slots[from].top + slots[from].h / 2 + dy;
+      to = 0;
+      slots.forEach((slot, i) => { if (i !== from && middle > slot.top + slot.h / 2) to = i + (i < from ? 1 : 0); });
+      rows.forEach((row, i) => {
+        if (i === from) return;
+        const shift = i > from && i <= to ? -lift : i < from && i >= to ? lift : 0;
+        row.style.transform = shift ? `translateY(${shift}px)` : "";
       });
-      if (before) { if (li.nextElementSibling !== before) before.before(li); }
-      else if (rows.length) rows[rows.length - 1].after(li);
     };
-    const stop = (e) => {
+    // Near the top or bottom edge of the window the page scrolls by itself
+    const autoScroll = () => {
+      const edge = 70, speed = clientY < edge ? -(edge - clientY) / 5 : clientY > innerHeight - edge ? (clientY - innerHeight + edge) / 5 : 0;
+      if (speed) { scrollBy(0, speed); update(); }
+      scroller = requestAnimationFrame(autoScroll);
+    };
+    scroller = requestAnimationFrame(autoScroll);
+
+    const move = (e) => { clientY = e.clientY; update(); };
+    const finish = (commit) => {
+      cancelAnimationFrame(scroller);
       handle.removeEventListener("pointermove", move);
-      handle.removeEventListener("pointerup", stop);
-      handle.removeEventListener("pointercancel", stop);
-      li.classList.remove("dragging");
-      document.body.classList.remove("dragging");
-      state.dragging = false;
-      if (e.type === "pointercancel") render();
-      else saveOrder();
+      handle.removeEventListener("pointerup", up);
+      handle.removeEventListener("pointercancel", cancel);
+      document.removeEventListener("keydown", key);
+      if (!commit) to = from;
+
+      // Settle into the slot, then make it the real order
+      const settle = to > from ? slots[to].bottom - slots[from].bottom : slots[to].top - slots[from].top;
+      li.classList.add("dropping");
+      li.style.transform = `translateY(${settle}px)`;
+      rows.forEach((row, i) => { if (i !== from) row.style.transform = i > from && i <= to ? `translateY(${-lift}px)` : i < from && i >= to ? `translateY(${lift}px)` : ""; });
+      setTimeout(() => {
+        const list = $("pending");
+        rows.forEach((row) => { row.style.transition = "none"; row.style.transform = ""; });
+        if (to !== from) (to > from ? rows[to].after(li) : rows[to].before(li));
+        li.classList.remove("dragging", "dropping");
+        document.body.classList.remove("dragging");
+        void list.offsetHeight;  // Apply the reset before transitions come back
+        rows.forEach((row) => { row.style.transition = ""; });
+        state.dragging = false;
+        if (to !== from) saveOrder(); else render();
+      }, matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 180);
     };
+    const up = () => finish(true);
+    const cancel = () => finish(false);
+    const key = (e) => { if (e.key === "Escape") finish(false); };
     handle.addEventListener("pointermove", move);
-    handle.addEventListener("pointerup", stop);
-    handle.addEventListener("pointercancel", stop);
+    handle.addEventListener("pointerup", up);
+    handle.addEventListener("pointercancel", cancel);
+    document.addEventListener("keydown", key);
   });
 
   handle.addEventListener("keydown", (event) => {
