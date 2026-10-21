@@ -345,7 +345,7 @@ $("clear-done").addEventListener("click", (event) => {
 
 // ---------- start ----------
 load().catch((error) => { $("sync").className = "sync error"; $("sync-text").textContent = error.message; });
-// Pick up what the board finished and keep the countdown fresh, unless something is being typed
+// Reload the tasks (other devices may have changed them) and keep the countdown fresh, unless something is being typed
 setInterval(() => { if (state.editingId === null && !$("new-text").value) load().catch(() => {}); else renderSync(); }, REFRESH_MS);
 setInterval(renderSync, 30000);
 </script>

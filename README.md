@@ -15,7 +15,7 @@ Desk clock and indoor climate dashboard for the
   beep 5 minutes before each meeting and another when it starts. A small PC
   program feeds it from Outlook (see [Teams calendar](#teams-calendar))
 - Pending tasks: a simple web page on your PC, synced with a tasks screen where
-  BOOT selects, finishes and deletes them (see [Tasks](#tasks))
+  one-way PC => board, BOOT scrolls through them (see [Tasks](#tasks))
 - Calendar and tasks are optional: each is turned on by its token in `secrets.h`
 
 ![Dashboard](docs/images/dashboard.png)
@@ -76,7 +76,7 @@ esp32-rlcd-dashboard/
 │   │   └── push_server.*      #   HTTP endpoints the PC pushes to, mDNS
 │   ├── model/                 # Plain data and logic (no hardware access)
 │   │   ├── calendar.*         #   Today's meetings and their alerts
-│   │   ├── tasks.*            #   Pending tasks and what was done with them
+│   │   ├── tasks.*            #   Pending tasks pushed by the PC
 │   │   ├── history.h          #   Sample history for the charts
 │   │   ├── date_time.h        #   DateTime struct and helpers
 │   │   └── push_body.h        #   Parsing of the bodies the PC pushes
@@ -152,9 +152,8 @@ setup and the page.
 
 - Each task has a text and a priority. High priority goes first (marked with a
   bar), then the oldest first.
-- On the tasks screen **BOOT** works on the highlighted task: a click selects the
-  next one, a double click marks it as done and holding it for a second deletes it.
-  The page picks that up at the next push (done tasks stay under "Done" there).
+- Sync is one way, PC => board: tasks are finished and deleted on the page. On the
+  tasks screen **BOOT** selects the next task (the list scrolls to follow it).
 - The board shows up to 20 tasks (`TASKS_MAX_ITEMS`), kept in RAM. The footer
   warns after `TASKS_STALE_MIN` minutes without news from the PC.
 - Like the calendar, tasks travel only inside the board's [WiFi windows](#power),
@@ -166,7 +165,7 @@ setup and the page.
 | Button | Dashboard | Calendar | Tasks |
 | ------ | --------- | -------- | ----- |
 | **KEY** | Next screen | Next screen (or silences a beep) | Next screen |
-| **BOOT** | Cycles the charts: both, temperature only, humidity only | Mutes / unmutes the beeps | Click: select next. Double click: done. Hold: delete |
+| **BOOT** | Cycles the charts: both, temperature only, humidity only | Mutes / unmutes the beeps | Selects the next task |
 
 With a single screen (no calendar and no tasks token) KEY does nothing. BOOT is
 only special while the chip resets: held during a reset it enters download mode

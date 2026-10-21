@@ -5,15 +5,12 @@ The wire format is described in src/model/tasks.h.
 """
 
 import json
-import logging
 import os
 import threading
 import time
 from dataclasses import asdict, dataclass
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
-
-log = logging.getLogger(__name__)
 
 TEXT_LIMIT = 200  # Characters per task
 BOARD_LIMIT = 40  # Tasks sent to the board (it shows TASKS_MAX_ITEMS, but must see the rest too)
@@ -123,9 +120,6 @@ class TaskStore:
                 task.done_at = int(time.time())
             elif was_done and not task.done:
                 task.done_at = 0
-                # The board may still remember it as finished or deleted: a new id
-                # keeps it from hiding the task that was just brought back
-                task.id = self._new_id()
             self._save()
             return asdict(task)
 
@@ -147,27 +141,3 @@ class TaskStore:
         for t in pending[:BOARD_LIMIT]:
             lines.append(f"{t.id}\t{int(t.high)}\t{t.text}")
         return "\n".join(lines) + "\n"
-
-    def apply_board_actions(self, lines: list[str]) -> int:
-        """Applies "done <id>" / "deleted <id>" lines from the board. Returns how many changed something."""
-        applied = 0
-        with self._lock:
-            for line in lines:
-                parts = line.split()
-                if len(parts) != 2 or not parts[1].isdigit() or parts[0] not in ("done", "deleted"):
-                    log.warning("Unexpected line from the board: %r", line)
-                    continue
-                task = self._find(int(parts[1]))
-                if task is None:
-                    continue  # Already gone from here: the board will drop it at the next push
-                if parts[0] == "deleted":
-                    self._tasks.remove(task)
-                    applied += 1
-                elif not task.done:
-                    task.done = True
-                    task.done_at = int(time.time())
-                    applied += 1
-                log.info("Board: %s '%s'", parts[0], task.text)
-            if applied:
-                self._save()
-        return applied

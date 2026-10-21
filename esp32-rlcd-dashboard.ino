@@ -11,7 +11,7 @@
       with beeps 5 minutes before and at the start
     - Pending tasks from a small web page on a PC (pc/tasks_server)
     - KEY switches screens; BOOT cycles the charts (dashboard), mutes the beeps
-      (calendar) or selects/finishes/deletes tasks (tasks)
+      (calendar) or selects the next task (tasks)
     - The calendar and tasks screens are turned on by CALENDAR_TOKEN and
       TASKS_TOKEN in secrets.h
 
@@ -353,8 +353,8 @@ static void handleKey()
   else screen = nextScreen();
 }
 
-// Keeps the selection on the same task after the list changed (a push, or one
-// finished/deleted), else on the same position.
+// Keeps the selection on the same task after a push changed the list, else on the
+// same position.
 static void keepTaskSelection(uint32_t selectedId)
 {
   for (int i = 0; i < tasks.count(); i++) {
@@ -366,29 +366,11 @@ static void keepTaskSelection(uint32_t selectedId)
   taskSelected = constrain(taskSelected, 0, max(tasks.count() - 1, 0));
 }
 
-// BOOT on the tasks screen: click selects the next task, double click finishes the
-// selected one and a long press deletes it.
-static void handleBootTasks(Gesture gesture)
+// BOOT on the tasks screen selects the next task (the list scrolls to follow it).
+static void handleBootTasks()
 {
   if (tasks.count() == 0) return;
-  taskSelected = constrain(taskSelected, 0, tasks.count() - 1);
-
-  switch (gesture) {
-    case Gesture::Click:
-      taskSelected = (taskSelected + 1) % tasks.count();
-      break;
-    case Gesture::DoubleClick:
-      Serial.printf("[tasks] Done: %s\n", tasks.at(taskSelected).text);
-      tasks.markDone(taskSelected);
-      break;
-    case Gesture::LongPress:
-      Serial.printf("[tasks] Deleted: %s\n", tasks.at(taskSelected).text);
-      tasks.remove(taskSelected);
-      break;
-    default:
-      return;
-  }
-  taskSelected = constrain(taskSelected, 0, max(tasks.count() - 1, 0));
+  taskSelected = (constrain(taskSelected, 0, tasks.count() - 1) + 1) % tasks.count();
 }
 
 // BOOT, per screen. Tasks: see handleBootTasks. Calendar: mutes/unmutes the meeting
@@ -397,7 +379,7 @@ static void handleBootTasks(Gesture gesture)
 static void handleBoot(Gesture gesture)
 {
   if (TASKS_ENABLED && screen == Screen::Tasks) {
-    handleBootTasks(gesture);
+    handleBootTasks();
     return;
   }
   if (CALENDAR_ENABLED && screen == Screen::Calendar) {
@@ -543,8 +525,7 @@ void loop()
     handleKey();
     redraw = true;
   }
-  // Double clicks only mean something on the tasks screen: elsewhere BOOT reacts at once
-  const Gesture gesture = bootButton.poll(TASKS_ENABLED && screen == Screen::Tasks);
+  const Gesture gesture = bootButton.poll(false);
   if (gesture != Gesture::None) {
     handleBoot(gesture);
     redraw = true;

@@ -1,7 +1,7 @@
 """
 delivery.py - Pushing the tasks to the board in each of its WiFi windows
 ------------------------------------------------------------------------
-The answer to each push lists what was finished or deleted with BOOT on the board.
+One way only: the board never sends anything back.
 """
 
 import configparser
@@ -37,7 +37,7 @@ class BoardStatus:
 
 def push_loop(store: TaskStore, esp_cfg: configparser.SectionProxy, token: str, status: BoardStatus,
               stop: threading.Event) -> None:
-    """In every WiFi window of the board: push the tasks and apply what it did with them."""
+    """In every WiFi window of the board: push the tasks."""
     while not stop.is_set():
         opens, closes = window_bounds(datetime.now())
         status.set(next_window=int(opens.timestamp()))
@@ -48,8 +48,6 @@ def push_loop(store: TaskStore, esp_cfg: configparser.SectionProxy, token: str, 
         answer = None
         try:
             answer = push_in_window(esp_cfg, store.board_body(), "/tasks", token)
-            if answer is not None:
-                store.apply_board_actions(answer.splitlines()[1:])  # The first line is "ok <n>"
         except Exception:
             log.exception("Push failed")
         if answer is None:

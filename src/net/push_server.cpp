@@ -76,16 +76,6 @@ void handleCalendarGet()
   server.send(200, "text/plain; charset=utf-8", out);
 }
 
-// One line per action the PC has not applied yet: "done <id>" or "deleted <id>".
-String pendingActions()
-{
-  String out;
-  for (int i = 0; i < g_tasks->actionCount(); i++) {
-    out += String(g_tasks->actionIsDelete(i) ? "deleted " : "done ") + g_tasks->actionId(i) + "\n";
-  }
-  return out;
-}
-
 void handleTasksPost()
 {
   if (!authorized(TASKS_TOKEN)) return;
@@ -104,7 +94,7 @@ void handleTasksPost()
     Serial.printf("[tasks] %d more tasks left out (TASKS_MAX_ITEMS = %d)\n",
                   g_tasks->dropped(), TASKS_MAX_ITEMS);
   }
-  server.send(200, "text/plain", String("ok ") + count + "\n" + pendingActions());
+  server.send(200, "text/plain", String("ok ") + count + "\n");
 }
 
 void handleTasksGet()
@@ -116,7 +106,6 @@ void handleTasksGet()
     const Task &t = g_tasks->at(i);
     out += String(t.id) + "\t" + (t.high ? "1" : "0") + "\t" + t.text + "\n";
   }
-  out += pendingActions();
   server.send(200, "text/plain; charset=utf-8", out);
 }
 

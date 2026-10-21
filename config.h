@@ -151,8 +151,8 @@ constexpr int      BEEP_VOLUME_PCT   = 60;     // Sample amplitude, 0..100
 constexpr bool     BEEP_ON_BOOT      = true;   // Short test beep after startup
 
 constexpr uint32_t BUTTON_DEBOUNCE_MS = 30;
-// BOOT on the tasks screen: a second click this soon makes a double click, and
-// held this long it is a long press.
+// BOOT: a second click this soon makes a double click (not used by any screen
+// now, Button::poll(false) skips it), and held this long it is a long press.
 constexpr uint32_t BUTTON_DOUBLE_CLICK_MS = 400;
 constexpr uint32_t BUTTON_LONG_PRESS_MS = 1000;
 
