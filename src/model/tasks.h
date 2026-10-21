@@ -5,7 +5,7 @@
   Sync is one way, PC => board: each push replaces the whole list.
 
   Push format (UTF-8 text, one record per line, fields separated by tabs), already in
-  display order (high priority first, then oldest first):
+  display order (the order set on the PC page):
     v1    <pc_now_epoch>
     <id>  <priority 0|1>  <text>
 */

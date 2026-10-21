@@ -150,8 +150,9 @@ web page that runs on your PC (open it from the phone too) and see them on the
 board's third screen. See [`pc/tasks_server/`](pc/tasks_server/README.md) for the
 setup and the page.
 
-- Each task has a text and a priority. High priority goes first (marked with a
-  bar), then the oldest first.
+- Each task has a text and a priority. They are shown in the order set
+  by dragging them on the page (new ones go last); high priority is marked with a
+  bar.
 - Sync is one way, PC => board: tasks are finished and deleted on the page. On the
   tasks screen **BOOT** selects the next task (the list scrolls to follow it).
 - The board shows up to 20 tasks (`TASKS_MAX_ITEMS`), kept in RAM. The footer

@@ -132,11 +132,28 @@ class TaskStore:
             self._save()
             return True
 
+    def reorder(self, ids) -> bool:
+        """Puts the pending tasks in the order of `ids` (all of them, once each).
+
+        The list order is the display order, on the page and on the board. Done tasks
+        keep their place; the pending ones are redistributed over the places the
+        pending ones held.
+        """
+        if not isinstance(ids, list) or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+            raise InvalidTask("ids must be a list of task ids")
+        with self._lock:
+            pending = {t.id: t for t in self._tasks if not t.done}
+            if len(ids) != len(pending) or set(ids) != set(pending):
+                raise InvalidTask("The task list changed, reload the page")
+            ordered = iter(pending[i] for i in ids)
+            self._tasks = [t if t.done else next(ordered) for t in self._tasks]
+            self._save()
+            return True
+
     def board_body(self) -> str:
-        """The pending tasks in the order the board shows them."""
+        """The pending tasks in the order the board shows them (the list order)."""
         with self._lock:
             pending = [t for t in self._tasks if not t.done]
-        pending.sort(key=lambda t: (not t.high, t.created, t.id))
         lines = [f"v1\t{int(time.time())}"]
         for t in pending[:BOARD_LIMIT]:
             lines.append(f"{t.id}\t{int(t.high)}\t{t.text}")

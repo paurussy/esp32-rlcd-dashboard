@@ -79,6 +79,9 @@
   .icon-btn[aria-pressed=true] { color: var(--high); background: var(--high-soft); }
   .icon-btn[aria-pressed=true] svg { fill: currentColor; }
   .icon-btn.trash:hover { color: var(--danger); }
+  .grip { cursor: grab; touch-action: none; width: 28px; margin-left: -6px; }
+  .task.dragging { opacity: .85; box-shadow: 0 8px 24px rgba(0, 0, 0, .22); border-color: var(--accent); position: relative; z-index: 2; }
+  body.dragging, body.dragging * { cursor: grabbing !important; user-select: none; }
   .limit { margin: 16px 4px 10px; font-size: .8rem; color: var(--muted); display: flex; align-items: center; gap: 10px; }
   .limit::before, .limit::after { content: ""; flex: 1; border-top: 1px dashed var(--line); }
   .empty-state { text-align: center; color: var(--muted); padding: 36px 16px; background: var(--surface); border: 1px dashed var(--line); border-radius: var(--radius); }
@@ -108,6 +111,7 @@
 <body>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">
   <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4m0 0h11l-2 4 2 4H5"/></symbol>
+  <symbol id="i-grip" viewBox="0 0 24 24"><path d="M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01" stroke-width="3"/></symbol>
   <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></symbol>
 </svg>
 
@@ -144,7 +148,7 @@ const TOKEN_KEY = "tasks-web-token";
 const REFRESH_MS = 15000;
 
 const $ = (id) => document.getElementById(id);
-const state = { tasks: [], updatedAt: 0, board: null, editingId: null, high: false };
+const state = { tasks: [], updatedAt: 0, board: null, editingId: null, high: false, dragging: false };
 
 // ---------- helpers ----------
 function el(tag, props = {}, ...children) {
@@ -163,10 +167,6 @@ const clock = (epoch) => new Date(epoch * 1000).toLocaleTimeString([], { hour: "
 function inMinutes(epoch) {
   const min = Math.max(0, Math.round((epoch * 1000 - Date.now()) / 60000));
   return min <= 0 ? "now" : min === 1 ? "in 1 min" : `in ${min} min`;
-}
-// Same order as the board: high priority first, then oldest first
-function boardOrder(list) {
-  return [...list].sort((a, b) => (b.high - a.high) || (a.created - b.created) || (a.id - b.id));
 }
 
 // ---------- API ----------
@@ -261,14 +261,77 @@ function row(task) {
     act(() => api("DELETE", `/api/tasks/${task.id}`)).then(() => toast(`Deleted: ${task.text}`, () => api("POST", "/api/tasks", copy)));
   });
 
-  return el("li", { className: "task" + (task.done ? " done" : "") + (task.high && !task.done ? " high" : "") },
+  const li = el("li", { className: "task" + (task.done ? " done" : "") + (task.high && !task.done ? " high" : "") },
     check, text, ...(task.done ? [] : [flag]), trash);
+  if (!task.done) {
+    li.dataset.id = task.id;
+    li.prepend(grip(li, task));
+  }
+  return li;
+}
+
+// ---------- reordering ----------
+// The order of the list is the order on the board. The handle works with the mouse, a
+// finger (pointer events) and the keyboard (arrow keys while it is focused).
+function pendingIds() {
+  return [...$("pending").querySelectorAll("li.task")].map((li) => Number(li.dataset.id));
+}
+const saveOrder = () => act(() => api("POST", "/api/tasks/order", { ids: pendingIds() }));
+
+function grip(li, task) {
+  const handle = el("button", { type: "button", className: "icon-btn grip", title: "Drag to reorder",
+                                ariaLabel: `Reorder "${task.text}" (arrow keys move it)` }, icon("grip"));
+
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    handle.setPointerCapture(event.pointerId);
+    state.dragging = true;
+    li.classList.add("dragging");
+    document.body.classList.add("dragging");
+
+    const move = (e) => {
+      const rows = [...$("pending").querySelectorAll("li.task")].filter((r) => r !== li);
+      const before = rows.find((r) => {
+        const box = r.getBoundingClientRect();
+        return e.clientY < box.top + box.height / 2;
+      });
+      if (before) { if (li.nextElementSibling !== before) before.before(li); }
+      else if (rows.length) rows[rows.length - 1].after(li);
+    };
+    const stop = (e) => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", stop);
+      handle.removeEventListener("pointercancel", stop);
+      li.classList.remove("dragging");
+      document.body.classList.remove("dragging");
+      state.dragging = false;
+      if (e.type === "pointercancel") render();
+      else saveOrder();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", stop);
+    handle.addEventListener("pointercancel", stop);
+  });
+
+  handle.addEventListener("keydown", (event) => {
+    const up = event.key === "ArrowUp", down = event.key === "ArrowDown";
+    if (!up && !down) return;
+    event.preventDefault();
+    const other = up ? li.previousElementSibling : li.nextElementSibling;
+    if (!other?.classList.contains("task")) return;
+    if (up) other.before(li); else other.after(li);
+    state.refocus = task.id;  // The reload after saving rebuilds the rows: put the focus back
+    saveOrder();
+  });
+  return handle;
 }
 
 function render() {
+  if (state.dragging) return;  // A reload must not drop the task being dragged
   if (document.activeElement?.classList.contains("edit") && state.editingId !== null) return;  // Don't pull the field away while typing
 
-  const pending = boardOrder(state.tasks.filter((t) => !t.done));
+  const pending = state.tasks.filter((t) => !t.done);  // Already in display order
   const done = state.tasks.filter((t) => t.done).sort((a, b) => b.done_at - a.done_at);
 
   $("count").textContent = pending.length === 0 ? "All clear" : `${pending.length} pending`;
@@ -286,6 +349,10 @@ function render() {
   $("done-box").hidden = done.length === 0;
   $("done-title").textContent = `Done (${done.length})`;
   $("done").replaceChildren(...done.map(row));
+  if (state.refocus) {
+    $("pending").querySelector(`li[data-id="${state.refocus}"] .grip`)?.focus();
+    state.refocus = null;
+  }
   renderSync();
 }
 

@@ -3,7 +3,8 @@ web.py - The task page and its JSON API
 ---------------------------------------
     GET    /                  The page (static/index.html)
     GET    /api/tasks         {"tasks": [...], "updated_at": epoch, "board": {delivery status}}
-    POST   /api/tasks         {"text", "high"} -> the new task
+    POST   /api/tasks         {"text", "high"} -> the new task, added at the end
+    POST   /api/tasks/order   {"ids": [...]} -> the pending tasks in that order (all of them)
     PATCH  /api/tasks/<id>    Any of text, high, done -> the task
     DELETE /api/tasks/<id>
 With [tasks] web_token set, /api/* needs it in the X-Web-Token header.
@@ -112,10 +113,13 @@ class Handler(BaseHTTPRequestHandler):
             self._error(404, "not found")
 
     def do_POST(self):
-        if self.path != "/api/tasks":
+        if self.path not in ("/api/tasks", "/api/tasks/order"):
             self._error(404, "not found")
         elif self._authorized() and (fields := self._body()) is not None:
-            self._answer(lambda: self.store.add(fields))
+            if self.path == "/api/tasks":
+                self._answer(lambda: self.store.add(fields))
+            else:
+                self._answer(lambda: self.store.reorder(fields.get("ids")))
 
     def do_PATCH(self):
         if not self._authorized() or (task_id := self._task_id()) is None:

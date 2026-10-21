@@ -30,8 +30,10 @@ tasks_server/
 Open `http://localhost:8765` on the PC, or `http://<the PC's IP>:8765` from the
 phone (same network). Each task has a text and a priority:
 
-- High priority tasks go first, then the rest oldest first, the same order the
-  board shows. The board shows up to 20 tasks (`TASKS_MAX_ITEMS`); the page marks
+- Drag the handle on the left of a task (or focus it and press the up / down
+  arrows) to reorder them: the board keeps exactly that order. New tasks go at the
+  end. The flag only marks a task as high priority (a bar on the board), it does
+  not move it. The board shows up to 20 tasks (`TASKS_MAX_ITEMS`); the page marks
   the ones that don't fit yet.
 - Changes reach the board in its next WiFi window, within 15 minutes. The page
   shows when the last delivery was and when the next window is.
