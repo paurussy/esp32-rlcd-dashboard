@@ -78,18 +78,30 @@ constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 10000;
 constexpr uint32_t NTP_RESPONSE_TIMEOUT_MS = 8000;
 
 // WiFi is off except during short windows, one every WIFI_WINDOW_PERIOD_MIN
-// minutes: it opens at minute 14, 29, 44, 59 (period - 1) and closes at 01, 16,
+// minutes (within the active hours below): it opens at minute 14, 29, 44, 59 (period - 1) and closes at 01, 16,
 // 31, 46 (or as soon as the work is done). The PC bridge pushes the calendar
 // inside the window (see pc/).
 constexpr uint32_t WIFI_WINDOW_PERIOD_MIN = 15;
 constexpr uint32_t WIFI_WINDOW_OPEN_BEFORE_MIN = 1;   // Opens this many minutes before the slot
 constexpr uint32_t WIFI_WINDOW_CLOSE_AFTER_MIN = 1;   // Closes this many minutes after it
 
+// Windows only exist for slots from WIFI_ACTIVE_FROM_HOUR:00 up to (not including)
+// WIFI_ACTIVE_UNTIL_HOUR:00: the first one opens at 07:59, the last one closes at
+// 16:46. Outside those hours WiFi stays off. pc/rlcd/board.py must use the same hours.
+constexpr uint32_t WIFI_ACTIVE_FROM_HOUR  = 8;
+constexpr uint32_t WIFI_ACTIVE_UNTIL_HOUR = 17;
+
+// A window closes early when the PC has not pushed anything this long after it
+// opened (or after its last push): the PC programs push as soon as it opens.
+constexpr uint32_t WIFI_WINDOW_IDLE_SEC = 45;
+
 // The window that finds the last NTP sync older than NTP_RESYNC_MIN also
 // re-syncs the RTC. After a failed attempt WiFi is switched on briefly just for
-// the sync every NTP_RETRY_MIN minutes, also outside the windows.
-constexpr uint32_t NTP_RESYNC_MIN = 60;
-constexpr uint32_t NTP_RETRY_MIN  = 5;
+// the sync, within the active hours: first after NTP_RETRY_MIN minutes, then
+// the wait doubles with each failure up to NTP_RETRY_MAX_MIN.
+constexpr uint32_t NTP_RESYNC_MIN    = 60;
+constexpr uint32_t NTP_RETRY_MIN     = 5;
+constexpr uint32_t NTP_RETRY_MAX_MIN = 60;
 
 // ============================================================
 //                          SENSORS
@@ -151,8 +163,8 @@ constexpr int      BEEP_VOLUME_PCT   = 60;     // Sample amplitude, 0..100
 constexpr bool     BEEP_ON_BOOT      = true;   // Short test beep after startup
 
 constexpr uint32_t BUTTON_DEBOUNCE_MS = 30;
-// BOOT on the tasks screen: a second click this soon makes a double click, and
-// held this long it is a long press.
+// BOOT: a second click this soon makes a double click (not used by any screen
+// now, Button::poll(false) skips it), and held this long it is a long press.
 constexpr uint32_t BUTTON_DOUBLE_CLICK_MS = 400;
 constexpr uint32_t BUTTON_LONG_PRESS_MS = 1000;
 

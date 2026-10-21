@@ -5,15 +5,12 @@ The wire format is described in src/model/tasks.h.
 """
 
 import json
-import logging
 import os
 import threading
 import time
 from dataclasses import asdict, dataclass
 from dataclasses import fields as dataclass_fields
 from pathlib import Path
-
-log = logging.getLogger(__name__)
 
 TEXT_LIMIT = 200  # Characters per task
 BOARD_LIMIT = 40  # Tasks sent to the board (it shows TASKS_MAX_ITEMS, but must see the rest too)
@@ -123,9 +120,6 @@ class TaskStore:
                 task.done_at = int(time.time())
             elif was_done and not task.done:
                 task.done_at = 0
-                # The board may still remember it as finished or deleted: a new id
-                # keeps it from hiding the task that was just brought back
-                task.id = self._new_id()
             self._save()
             return asdict(task)
 
@@ -138,36 +132,29 @@ class TaskStore:
             self._save()
             return True
 
+    def reorder(self, ids) -> bool:
+        """Puts the pending tasks in the order of `ids` (all of them, once each).
+
+        The list order is the display order, on the page and on the board. Done tasks
+        keep their place; the pending ones are redistributed over the places the
+        pending ones held.
+        """
+        if not isinstance(ids, list) or not all(isinstance(i, int) and not isinstance(i, bool) for i in ids):
+            raise InvalidTask("ids must be a list of task ids")
+        with self._lock:
+            pending = {t.id: t for t in self._tasks if not t.done}
+            if len(ids) != len(pending) or set(ids) != set(pending):
+                raise InvalidTask("The task list changed, reload the page")
+            ordered = iter(pending[i] for i in ids)
+            self._tasks = [t if t.done else next(ordered) for t in self._tasks]
+            self._save()
+            return True
+
     def board_body(self) -> str:
-        """The pending tasks in the order the board shows them."""
+        """The pending tasks in the order the board shows them (the list order)."""
         with self._lock:
             pending = [t for t in self._tasks if not t.done]
-        pending.sort(key=lambda t: (not t.high, t.created, t.id))
         lines = [f"v1\t{int(time.time())}"]
         for t in pending[:BOARD_LIMIT]:
             lines.append(f"{t.id}\t{int(t.high)}\t{t.text}")
         return "\n".join(lines) + "\n"
-
-    def apply_board_actions(self, lines: list[str]) -> int:
-        """Applies "done <id>" / "deleted <id>" lines from the board. Returns how many changed something."""
-        applied = 0
-        with self._lock:
-            for line in lines:
-                parts = line.split()
-                if len(parts) != 2 or not parts[1].isdigit() or parts[0] not in ("done", "deleted"):
-                    log.warning("Unexpected line from the board: %r", line)
-                    continue
-                task = self._find(int(parts[1]))
-                if task is None:
-                    continue  # Already gone from here: the board will drop it at the next push
-                if parts[0] == "deleted":
-                    self._tasks.remove(task)
-                    applied += 1
-                elif not task.done:
-                    task.done = True
-                    task.done_at = int(time.time())
-                    applied += 1
-                log.info("Board: %s '%s'", parts[0], task.text)
-            if applied:
-                self._save()
-        return applied

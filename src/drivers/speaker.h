@@ -30,6 +30,10 @@ public:
   // Detects the codec and starts the playback task.
   bool begin(uint32_t sampleRate, uint32_t toneHz, int volumePct);
 
+  // Amplifier off and codec powered down, without starting the playback task: for
+  // when the beeps are not used.
+  void shutdown();
+
   // Starts a pattern, replacing the one playing (if any).
   void beep(BeepPattern pattern);
 
@@ -54,6 +58,7 @@ private:
   bool writeReg(uint8_t reg, uint8_t value);
   bool readReg(uint8_t reg, uint8_t &value);
   bool initCodec();
+  void powerDown();
   void play(BeepPattern pattern);
   void writeTone(uint32_t ms);
   void writeSilence(uint32_t ms);

@@ -65,7 +65,7 @@ void drawTasksFooter(U8G2 &g, const TasksView &t)
   if (!t.hasData)    strcpy(left, "Waiting for the PC task page");
   else if (t.stale)  snprintf(left, sizeof(left), "No update from the PC since %s", hm);
   else               snprintf(left, sizeof(left), "Synced %s", hm);
-  drawFooterText(g, left, t.list->count() > 0 ? "BOOT: next  2x: done  hold: delete" : "KEY: screen");
+  drawFooterText(g, left, t.list->count() > 0 ? "BOOT: next" : "KEY: screen");
 }
 
 }  // namespace

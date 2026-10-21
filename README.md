@@ -15,7 +15,7 @@ Desk clock and indoor climate dashboard for the
   beep 5 minutes before each meeting and another when it starts. A small PC
   program feeds it from Outlook (see [Teams calendar](#teams-calendar))
 - Pending tasks: a simple web page on your PC, synced with a tasks screen where
-  BOOT selects, finishes and deletes them (see [Tasks](#tasks))
+  one-way PC => board, BOOT scrolls through them (see [Tasks](#tasks))
 - Calendar and tasks are optional: each is turned on by its token in `secrets.h`
 
 ![Dashboard](docs/images/dashboard.png)
@@ -76,7 +76,7 @@ esp32-rlcd-dashboard/
 │   │   └── push_server.*      #   HTTP endpoints the PC pushes to, mDNS
 │   ├── model/                 # Plain data and logic (no hardware access)
 │   │   ├── calendar.*         #   Today's meetings and their alerts
-│   │   ├── tasks.*            #   Pending tasks and what was done with them
+│   │   ├── tasks.*            #   Pending tasks pushed by the PC
 │   │   ├── history.h          #   Sample history for the charts
 │   │   ├── date_time.h        #   DateTime struct and helpers
 │   │   └── push_body.h        #   Parsing of the bodies the PC pushes
@@ -150,15 +150,16 @@ web page that runs on your PC (open it from the phone too) and see them on the
 board's third screen. See [`pc/tasks_server/`](pc/tasks_server/README.md) for the
 setup and the page.
 
-- Each task has a text and a priority. High priority goes first (marked with a
-  bar), then the oldest first.
-- On the tasks screen **BOOT** works on the highlighted task: a click selects the
-  next one, a double click marks it as done and holding it for a second deletes it.
-  The page picks that up at the next push (done tasks stay under "Done" there).
+- Each task has a text and a priority. They are shown in the order set
+  by dragging them on the page (new ones go last); high priority is marked with a
+  bar.
+- Sync is one way, PC => board: tasks are finished and deleted on the page. On the
+  tasks screen **BOOT** selects the next task (the list scrolls to follow it).
 - The board shows up to 20 tasks (`TASKS_MAX_ITEMS`), kept in RAM. The footer
   warns after `TASKS_STALE_MIN` minutes without news from the PC.
 - Like the calendar, tasks travel only inside the board's [WiFi windows](#power),
-  so a change on the page reaches the board within 15 minutes.
+  so a change on the page reaches the board within 15 minutes (between 08:00 and
+  17:00; changes made outside those hours arrive in the first window of the morning).
 - Turned on by `TASKS_TOKEN` in `secrets.h`; the PC must send the same token.
 
 ## Buttons
@@ -166,7 +167,7 @@ setup and the page.
 | Button | Dashboard | Calendar | Tasks |
 | ------ | --------- | -------- | ----- |
 | **KEY** | Next screen | Next screen (or silences a beep) | Next screen |
-| **BOOT** | Cycles the charts: both, temperature only, humidity only | Mutes / unmutes the beeps | Click: select next. Double click: done. Hold: delete |
+| **BOOT** | Cycles the charts: both, temperature only, humidity only | Mutes / unmutes the beeps | Selects the next task |
 
 With a single screen (no calendar and no tasks token) KEY does nothing. BOOT is
 only special while the chip resets: held during a reset it enters download mode
@@ -178,18 +179,25 @@ There is a single, efficient mode (no switch to turn it on):
 
 - **Screen**: redrawn once per minute, right after the minute changes (no
   seconds on the clock), and immediately when KEY is pressed.
-- **CPU**: runs at 80 MHz (`CPU_FREQ_MHZ`) and light-sleeps between refreshes;
-  the reflective LCD keeps the image without power. KEY wakes it up.
+- **CPU**: runs at 80 MHz (`CPU_FREQ_MHZ`) and light-sleeps between refreshes.
+  KEY wakes it up.
+- **Screen**: the reflective LCD keeps the image between refreshes; the ST7305
+  is in its low power mode then and only switches to high power while a frame
+  is written.
 - **Bluetooth**: never started.
 - **WiFi**: off, except in a window that opens at minute :59, :14, :29 and :44
-  and closes at :01, :16, :31 and :46 (`WIFI_WINDOW_*` in `config.h`). In a
-  window the board connects, listens for the PC's pushes (calendar and tasks) and,
-  if the last sync is about an hour old, re-syncs the clock via NTP (the :59
-  window). It switches WiFi off as soon as everything enabled has arrived. If a clock sync fails,
-  WiFi is switched on again just for it every `NTP_RETRY_MIN` (5) minutes,
-  also outside the windows, until it works. The WiFi icon only shows while
-  actually connected.
-- **Audio**: the speaker codec and I2S are only powered while a beep plays.
+  and closes at :01, :16, :31 and :46 (`WIFI_WINDOW_*` in `config.h`), and only
+  between 08:00 and 17:00 (`WIFI_ACTIVE_*`: the first window opens at 07:59, the
+  last one closes at 16:46). In a window the board connects, listens for the PC's
+  pushes (calendar and tasks) and, if the last sync is about an hour old,
+  re-syncs the clock via NTP (the first window of the morning, then the :59
+  ones). It switches WiFi off as soon as everything enabled has arrived, or
+  `WIFI_WINDOW_IDLE_SEC` (45 s) after opening if the PC pushes nothing. If a
+  clock sync fails, WiFi is switched on again just for it within the active hours,
+  after 5 minutes at first and then every 10, 20, 40 and 60 (`NTP_RETRY_*`),
+  until it works. The WiFi icon only shows while actually connected.
+- **Audio**: the speaker codec and I2S are only powered while a beep plays;
+  the codec and amplifier are powered down the rest of the time.
 - The temperature sensor, battery and chart are sampled once a minute. With the
   board no longer running hot all the time, `TEMP_OFFSET_C` was lowered to
   -1.5 as an estimate: **calibrate it** against a trusted thermometer.

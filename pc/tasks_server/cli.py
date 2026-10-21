@@ -3,8 +3,7 @@ tasks_server - Task list web page for the ESP32 dashboard
 ---------------------------------------------------------
 Serves a small web page where you manage your pending tasks, keeps them in
 pc/data/tasks.json, and pushes them to the board in every one of its WiFi windows
-(POST /tasks, format in src/model/tasks.h). Tasks finished or deleted with the BOOT
-button on the board come back in the answer to that push and are applied here.
+(POST /tasks, format in src/model/tasks.h). Sync is one way, PC => board.
 
 Runs forever; install_tasks.ps1 starts it at sign-in. Open the page at
 http://localhost:8765, or from the phone at http://<this PC's IP>:8765.

@@ -34,6 +34,14 @@ constexpr RegValue CODEC_INIT[] = {
   {0x31, 0x00},  // DAC unmuted
 };
 
+// Suspend sequence of the same driver (es8311_suspend): DAC and analog blocks off,
+// clocks stopped. Needs no MCLK, so it also works with I2S not running.
+constexpr RegValue CODEC_POWER_DOWN[] = {
+  {0x32, 0x00}, {0x17, 0x00}, {0x0E, 0xFF}, {0x12, 0x02}, {0x14, 0x00}, {0x0D, 0xFA},
+  {0x15, 0x00}, {0x02, 0x10}, {0x00, 0x00}, {0x00, 0x1F}, {0x01, 0x30}, {0x01, 0x00},
+  {0x45, 0x01},
+};
+
 struct PatternSpec {
   uint8_t count;
   uint16_t onMs, offMs;
@@ -88,6 +96,18 @@ bool Speaker::initCodec()
   return ok;
 }
 
+void Speaker::powerDown()
+{
+  for (const RegValue &rv : CODEC_POWER_DOWN) writeReg(rv.reg, rv.value);
+}
+
+void Speaker::shutdown()
+{
+  pinMode(_pins.pa, OUTPUT);
+  digitalWrite(_pins.pa, LOW);
+  powerDown();
+}
+
 bool Speaker::begin(uint32_t sampleRate, uint32_t toneHz, int volumePct)
 {
   _sampleRate = sampleRate;
@@ -99,6 +119,7 @@ bool Speaker::begin(uint32_t sampleRate, uint32_t toneHz, int volumePct)
 
   uint8_t id = 0;
   if (!readReg(REG_CHIP_ID1, id) || id != CHIP_ID1_ES8311) return false;
+  powerDown();  // It may come out of reset half on
 
   // I2S (and its MCLK) and the codec are only brought up while a pattern plays
   if (xTaskCreate(taskMain, "speaker", 4096, this, 2, &_task) != pdPASS) return false;
@@ -170,7 +191,7 @@ void Speaker::play(BeepPattern pattern)
   }
   writeSilence(DMA_DRAIN_MS);
   digitalWrite(_pins.pa, LOW);
-  writeReg(0x00, 0x00);  // Codec off (reset/power-down) before MCLK stops
+  powerDown();  // Codec fully off before MCLK stops
   i2s.end();
   _playing = false;
 }

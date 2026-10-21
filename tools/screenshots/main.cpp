@@ -234,7 +234,7 @@ void fillCalendar(Calendar &calendar, time_t receivedAt)
   if (calendar.update(body.c_str(), receivedAt) != 6) fprintf(stderr, "calendar parse failed\n");
 }
 
-// Pending tasks as the PC sends them: high priority first, then oldest first.
+// Pending tasks as the PC sends them, in the order set on its page.
 void fillTasks(TaskList &tasks, time_t receivedAt)
 {
   struct Item {

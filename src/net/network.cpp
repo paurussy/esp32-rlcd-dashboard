@@ -42,7 +42,10 @@ bool wifiConnect(uint32_t timeoutMs)
 
   if (g_knownAp.valid) {
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD, g_knownAp.channel, g_knownAp.bssid);
-    if (waitConnected(timeoutMs / 2)) return true;
+    if (waitConnected(timeoutMs / 2)) {
+      WiFi.setSleep(WIFI_PS_MAX_MODEM);  // Radio sleeps between beacons while waiting for the PC
+      return true;
+    }
     WiFi.disconnect();
     g_knownAp.valid = false;  // Moved or gone: scan next
   }
@@ -53,6 +56,7 @@ bool wifiConnect(uint32_t timeoutMs)
   g_knownAp.channel = WiFi.channel();
   memcpy(g_knownAp.bssid, WiFi.BSSID(), sizeof(g_knownAp.bssid));
   g_knownAp.valid = true;
+  WiFi.setSleep(WIFI_PS_MAX_MODEM);
   return true;
 }
 

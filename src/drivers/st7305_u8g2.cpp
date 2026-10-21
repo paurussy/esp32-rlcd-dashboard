@@ -27,7 +27,8 @@ constexpr uint8_t CMD_DISPLAY_ON       = 0x29;
 constexpr uint8_t CMD_COLUMN_ADDR_SET  = 0x2A;
 constexpr uint8_t CMD_ROW_ADDR_SET     = 0x2B;
 constexpr uint8_t CMD_MEMORY_WRITE     = 0x2C;
-constexpr uint8_t CMD_HIGH_POWER_MODE  = 0x38;
+constexpr uint8_t CMD_HIGH_POWER_MODE  = 0x38;  // Panel refresh at the full frame rate: while a frame is written
+constexpr uint8_t CMD_LOW_POWER_MODE   = 0x39;  // Slow refresh: the rest of the time
 
 // Only one panel per board, so a single instance is enough for the C callbacks.
 ST7305_U8g2 *g_instance = nullptr;
@@ -158,6 +159,9 @@ void ST7305_U8g2::drawTileRow(const u8x8_tile_t *tile)
 
   const uint8_t *rowBase = tile->tile_ptr - static_cast<uint16_t>(tile->x_pos) * 8U;
 
+  // sendBuffer() writes the tile rows top to bottom: full power for the whole frame
+  if (tile->y_pos == 0) writeCommand(CMD_HIGH_POWER_MODE);
+
   const uint8_t colBounds[] = {static_cast<uint8_t>(COLUMN_ADDR_MIRROR - addrEnd),
                                static_cast<uint8_t>(COLUMN_ADDR_MIRROR - addrStart)};
   writeCommandData(CMD_COLUMN_ADDR_SET, colBounds, sizeof(colBounds));
@@ -188,6 +192,8 @@ void ST7305_U8g2::drawTileRow(const u8x8_tile_t *tile)
   }
 
   writeCommandData(CMD_MEMORY_WRITE, out, static_cast<size_t>(sendCount) * 4U);
+
+  if (tile->y_pos == TILE_HEIGHT - 1) writeCommand(CMD_LOW_POWER_MODE);
 }
 
 // Communication is handled directly in this class, so U8g2's byte layer is a no-op.
@@ -274,6 +280,6 @@ void ST7305_U8g2::initPanel()
   writeCommandData(CMD_ROW_ADDR_SET, rowWindow, sizeof(rowWindow));
   writeCommandData(0x35, tearingEffect, sizeof(tearingEffect));
   writeCommandData(0xD0, autoPowerDown, sizeof(autoPowerDown));
-  writeCommand(CMD_HIGH_POWER_MODE);
+  writeCommand(CMD_LOW_POWER_MODE);  // Each frame switches to high power while it is written
   writeCommand(CMD_DISPLAY_ON);
 }

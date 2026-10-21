@@ -20,6 +20,10 @@ WINDOW_PERIOD_MIN = 15
 OPEN_BEFORE_MIN = 1
 CLOSE_AFTER_MIN = 1
 CLOSE_MARGIN_S = 5  # Stop trying this long before the board closes
+# Only slots from ACTIVE_FROM_HOUR:00 up to (not including) ACTIVE_UNTIL_HOUR:00 have a
+# window (WIFI_ACTIVE_* in config.h): the board keeps WiFi off the rest of the day.
+ACTIVE_FROM_HOUR = 8
+ACTIVE_UNTIL_HOUR = 17
 
 
 def push(cfg: configparser.SectionProxy, body: str, path: str, token: str) -> str:
@@ -41,16 +45,22 @@ def push(cfg: configparser.SectionProxy, body: str, path: str, token: str) -> st
     return answer
 
 
+def in_active_hours(now: datetime) -> bool:
+    """Whether the board may have WiFi on at all at this time of day."""
+    return ACTIVE_FROM_HOUR <= now.hour < ACTIVE_UNTIL_HOUR
+
+
 def window_bounds(now: datetime) -> tuple[datetime, datetime]:
-    """Start and end of the window closest to `now` (the current one, else the next)."""
-    base = now.replace(minute=0, second=0, microsecond=0)
-    slots = [base + timedelta(minutes=m) for m in range(0, 61 + WINDOW_PERIOD_MIN, WINDOW_PERIOD_MIN)]
-    for slot in slots:
+    """Start and end of the window closest to `now` (the current one, else the next active one)."""
+    slot = now.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    while True:
+        slot += timedelta(minutes=WINDOW_PERIOD_MIN)
+        if not ACTIVE_FROM_HOUR <= slot.hour < ACTIVE_UNTIL_HOUR:
+            continue
         opens = slot - timedelta(minutes=OPEN_BEFORE_MIN)
         closes = slot + timedelta(minutes=CLOSE_AFTER_MIN)
         if now < closes:
             return opens, closes
-    raise AssertionError("unreachable")
 
 
 def push_in_window(cfg: configparser.SectionProxy, body: str, path: str, token: str) -> str | None:
