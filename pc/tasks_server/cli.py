@@ -3,7 +3,8 @@ tasks_server - Task list web page for the ESP32 dashboard
 ---------------------------------------------------------
 Serves a small web page where you manage your pending tasks, keeps them in
 pc/data/tasks.json, and pushes them to the board in every one of its WiFi windows
-(POST /tasks, format in src/model/tasks.h). Sync is one way, PC => board.
+(POST /tasks, format in src/model/tasks.h), or, with the board's power saving off,
+whenever the board does not hold the current list. Sync is one way, PC => board.
 
 Runs forever; install_tasks.ps1 starts it at sign-in. Open the page at
 http://localhost:8765, or from the phone at http://<this PC's IP>:8765.
@@ -26,7 +27,7 @@ from rlcd.logs import setup_logging
 
 from .delivery import BoardStatus, push_loop
 from .store import TaskStore
-from .web import Handler
+from .web import Handler, local_host_names
 
 log = logging.getLogger("tasks_server")
 
@@ -54,6 +55,7 @@ def main() -> None:
     Handler.store = store
     Handler.status = status
     Handler.web_token = tasks_cfg.get("web_token", "").strip()
+    Handler.allowed_hosts = local_host_names(tasks_cfg.get("allowed_hosts", ""))
 
     bind = tasks_cfg.get("bind", "0.0.0.0")
     port = int(tasks_cfg.get("port", "8765"))
