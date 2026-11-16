@@ -32,6 +32,17 @@ answers or the window is about to close. The board switches WiFi off once it has
 received everything it is waiting for, so run by hand outside a window they try
 once and the board will most likely not answer.
 
+With the board's power saving off (`POWER_SAVING = false` in `config.h`,
+`power_saving = false` in `[esp32]` of `config.ini`) there are no windows: the
+board keeps WiFi on 24/7 and both programs check every minute, at any hour, pushing
+only when something changed (`data/last_push_*.json` remembers what was last
+delivered; delete those files to force a push, e.g. after the board restarted, or
+set `resend_every_min`). At sign-in (usually when the PC is switched on, maybe
+together with the board) both do a full sync: the tasks server when it starts, the
+calendar through the "RLCD calendar full sync" task (`calendar_bridge --once
+--resync`); until the board answers they retry every minute. Run
+`install_tasks.ps1` again after changing it.
+
 ## Setup
 
 1. Set the tokens in the firmware's `secrets.h` and flash the board:
