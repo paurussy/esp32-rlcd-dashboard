@@ -4,8 +4,9 @@
   No hardware access: the sketch feeds it the body of each push and asks it,
   once per minute, whether an alert is due.
 
-  Push format (UTF-8 text, one record per line, fields separated by tabs):
-    v1    <pc_now_epoch>
+  Push format (UTF-8 text, one record per line, fields separated by tabs). Header in
+  push_body.h (a v1 header, without the hash, is still accepted):
+    v2    <pc_now_epoch>  <content_hash>
     <id>  <start_epoch>  <end_epoch>  <subject>  <location>
   Epochs are UTC seconds; <id> is a 32-bit number that stays the same across
   pushes, so alerts already played are not repeated.
@@ -54,10 +55,13 @@ public:
   time_t lastUpdate() const { return _lastUpdate; }
   int count() const { return _count; }
   const CalendarEvent &at(int i) const { return _events[i]; }
+  // Hash of the content, as computed by the PC ("" for v1 bodies or no data yet).
+  const char *hash() const { return _hash; }
 
 private:
   CalendarEvent _events[CALENDAR_MAX_EVENTS];
   int _count = 0;
   int _dropped = 0;
   time_t _lastUpdate = 0;
+  char _hash[17] = "";
 };

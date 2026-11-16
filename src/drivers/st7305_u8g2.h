@@ -26,6 +26,12 @@ public:
 
   U8G2 &u8g2() { return _u8g2; }
 
+  // true (default): the panel idles in its low power mode and switches to high power
+  // only while a frame is written. The switch shows as a short blink, fine once a
+  // minute. false: it stays in high power mode, for redraws every second with no
+  // blink (more current). Call before begin().
+  void setLowPowerIdle(bool lowPowerIdle) { _lowPowerIdle = lowPowerIdle; }
+
   // Latches the control pins (CS, DC, RST) so the panel keeps its image
   // while the chip is in light sleep. Release them after waking up.
   void holdPins(bool hold);
@@ -39,6 +45,9 @@ private:
   SPIClass *_spi = nullptr;
   U8G2 _u8g2;
   uint8_t *_buffer = nullptr;
+  uint8_t *_sent = nullptr;     // Copy of the last frame sent (full-buffer mode): unchanged rows are skipped
+  bool _sentValid = false;
+  bool _lowPowerIdle = true;
 
   void hardwareReset();
   void initPanel();

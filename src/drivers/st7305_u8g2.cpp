@@ -71,6 +71,7 @@ ST7305_U8g2::~ST7305_U8g2()
     delete _spi;
   }
   free(_buffer);
+  free(_sent);
   if (g_instance == this) {
     g_instance = nullptr;
   }
@@ -97,6 +98,9 @@ bool ST7305_U8g2::begin(uint8_t tileBufHeight, const u8g2_cb_t *rotation)
   if (!_buffer) {
     return false;
   }
+  // Only in full-buffer mode does each tile row have a fixed place in the buffer.
+  // Without the copy every row is simply sent.
+  if (rows == TILE_HEIGHT) _sent = static_cast<uint8_t *>(malloc(size));
 
   u8g2_SetupBuffer(u, _buffer, rows, u8g2_ll_hvline_vertical_top_lsb, rotation);
   u8g2_InitDisplay(u);
@@ -160,7 +164,20 @@ void ST7305_U8g2::drawTileRow(const u8x8_tile_t *tile)
   const uint8_t *rowBase = tile->tile_ptr - static_cast<uint16_t>(tile->x_pos) * 8U;
 
   // sendBuffer() writes the tile rows top to bottom: full power for the whole frame
-  if (tile->y_pos == 0) writeCommand(CMD_HIGH_POWER_MODE);
+  const bool firstRow = tile->y_pos == 0;
+  const bool lastRow = tile->y_pos == TILE_HEIGHT - 1;
+  if (firstRow && _lowPowerIdle) writeCommand(CMD_HIGH_POWER_MODE);
+
+  // Rows identical to the last frame sent are not written again: the panel keeps them
+  if (_sent && tile->x_pos == 0 && tile->cnt == TILE_WIDTH) {
+    uint8_t *sentRow = _sent + static_cast<size_t>(tile->y_pos) * BUFFER_ROW_BYTES;
+    if (_sentValid && memcmp(sentRow, rowBase, BUFFER_ROW_BYTES) == 0) {
+      if (lastRow && _lowPowerIdle) writeCommand(CMD_LOW_POWER_MODE);
+      return;
+    }
+    memcpy(sentRow, rowBase, BUFFER_ROW_BYTES);
+    if (lastRow) _sentValid = true;
+  }
 
   const uint8_t colBounds[] = {static_cast<uint8_t>(COLUMN_ADDR_MIRROR - addrEnd),
                                static_cast<uint8_t>(COLUMN_ADDR_MIRROR - addrStart)};
@@ -193,7 +210,7 @@ void ST7305_U8g2::drawTileRow(const u8x8_tile_t *tile)
 
   writeCommandData(CMD_MEMORY_WRITE, out, static_cast<size_t>(sendCount) * 4U);
 
-  if (tile->y_pos == TILE_HEIGHT - 1) writeCommand(CMD_LOW_POWER_MODE);
+  if (lastRow && _lowPowerIdle) writeCommand(CMD_LOW_POWER_MODE);
 }
 
 // Communication is handled directly in this class, so U8g2's byte layer is a no-op.
@@ -280,6 +297,9 @@ void ST7305_U8g2::initPanel()
   writeCommandData(CMD_ROW_ADDR_SET, rowWindow, sizeof(rowWindow));
   writeCommandData(0x35, tearingEffect, sizeof(tearingEffect));
   writeCommandData(0xD0, autoPowerDown, sizeof(autoPowerDown));
-  writeCommand(CMD_LOW_POWER_MODE);  // Each frame switches to high power while it is written
+  // Low power idle: each frame switches to high power while it is written. Otherwise
+  // high power all the time, with no switch (and no blink) on each frame.
+  writeCommand(_lowPowerIdle ? CMD_LOW_POWER_MODE : CMD_HIGH_POWER_MODE);
   writeCommand(CMD_DISPLAY_ON);
+  _sentValid = false;  // Panel RAM undefined after the reset: the first frame is sent in full
 }

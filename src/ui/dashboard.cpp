@@ -44,6 +44,8 @@ void drawFooter(U8G2 &g, const DashboardState &s)
     char hm[8];
     formatHM(s.lastNtpSync, hm, sizeof(hm));
     snprintf(left, sizeof(left), "clock synced %s", hm);
+  } else if (s.clockFromPc) {
+    strcpy(left, "clock set by the PC");
   } else {
     strcpy(left, "clock not synced");
   }
@@ -75,21 +77,33 @@ int maxDigitWidth(U8G2 &g)
   return widest;
 }
 
-// Large HH:MM (the screen is only refreshed once per minute, so no seconds).
+// Gap between the minutes and the smaller seconds
+constexpr int SECONDS_GAP = 8;
+
+// Large HH:MM. With s.showSeconds (screen redrawn every second, POWER_SAVING off)
+// the seconds follow in a smaller size, on the same baseline.
 void drawClock(U8G2 &g, const DashboardState &s, int top)
 {
+  int smallDigitW = 0;
+  if (s.showSeconds) {
+    g.setFont(u8g2_font_logisoso42_tn);
+    smallDigitW = maxDigitWidth(g);
+  }
+
   g.setFont(u8g2_font_logisoso78_tn);
   int bigDigitW = maxDigitWidth(g);
   int colonW = g.getStrWidth(":");
   int baseY = top + g.getAscent();
 
-  int totalW = 4 * bigDigitW + colonW + 6;
+  int hmW = 4 * bigDigitW + colonW + 6;
+  int totalW = hmW + (s.showSeconds ? SECONDS_GAP + 2 * smallDigitW : 0);
   int x0 = (SCREEN_W - totalW) / 2;
 
-  char hh[4] = "--", mm[4] = "--";
+  char hh[4] = "--", mm[4] = "--", ss[4] = "--";
   if (s.rtcPresent) {
     snprintf(hh, sizeof(hh), "%02u", s.now.hour % 100);
     snprintf(mm, sizeof(mm), "%02u", s.now.minute % 100);
+    snprintf(ss, sizeof(ss), "%02u", s.now.second % 100);
   }
 
   drawDigit(g, x0, bigDigitW, baseY, hh[0]);
@@ -97,6 +111,13 @@ void drawClock(U8G2 &g, const DashboardState &s, int top)
   g.drawStr(x0 + 2 * bigDigitW + 3, baseY - 4, ":");
   drawDigit(g, x0 + 2 * bigDigitW + colonW + 6, bigDigitW, baseY, mm[0]);
   drawDigit(g, x0 + 3 * bigDigitW + colonW + 6, bigDigitW, baseY, mm[1]);
+
+  if (s.showSeconds) {
+    g.setFont(u8g2_font_logisoso42_tn);
+    int sx = x0 + hmW + SECONDS_GAP;
+    drawDigit(g, sx, smallDigitW, baseY, ss[0]);
+    drawDigit(g, sx + smallDigitW, smallDigitW, baseY, ss[1]);
+  }
 }
 
 void drawDate(U8G2 &g, const DashboardState &s, int baseY)
@@ -104,7 +125,7 @@ void drawDate(U8G2 &g, const DashboardState &s, int baseY)
   char text[64];
   if (!s.rtcPresent) {
     strcpy(text, "RTC not detected");
-  } else if (s.rtcTimeInvalid && !s.timeSynced) {
+  } else if (s.rtcTimeInvalid && !s.timeSynced && !s.clockFromPc) {
     strcpy(text, "Time not synced (check WiFi settings)");
   } else {
     snprintf(text, sizeof(text), "%s, %s %u, %u", WEEKDAYS[s.now.weekday % 7],
@@ -118,19 +139,29 @@ void drawDate(U8G2 &g, const DashboardState &s, int baseY)
 // ============================================================
 //                        SENSOR CARDS
 // ============================================================
+// Lowest and highest of the points that are not gaps (NAN). False if all are gaps.
+bool range(const float *data, int n, float &lo, float &hi)
+{
+  bool any = false;
+  for (int i = 0; i < n; i++) {
+    if (isnan(data[i])) continue;
+    lo = any ? min(lo, data[i]) : data[i];
+    hi = any ? max(hi, data[i]) : data[i];
+    any = true;
+  }
+  return any;
+}
+
 // Sparkline of the recent history (2 px thick line, newest sample on the right).
-// `minRange` keeps small fluctuations from being exaggerated.
+// Gaps (NAN: the board was off) break the line. `minRange` keeps small fluctuations
+// from being exaggerated.
 void drawSparkline(U8G2 &g, int x, int y, int w, int h, const float *data, int n, float minRange)
 {
   g.drawVLine(x, y, h);
   g.drawHLine(x, y + h - 1, w);
-  if (n < 1) return;
+  float lo = 0, hi = 0;
+  if (n < 1 || !range(data, n, lo, hi)) return;
 
-  float lo = data[0], hi = data[0];
-  for (int i = 1; i < n; i++) {
-    lo = min(lo, data[i]);
-    hi = max(hi, data[i]);
-  }
   if (hi - lo < minRange) {
     float mid = (hi + lo) / 2;
     lo = mid - minRange / 2;
@@ -140,10 +171,15 @@ void drawSparkline(U8G2 &g, int x, int y, int w, int h, const float *data, int n
   // The points always span the full width
   float step = n > 1 ? static_cast<float>(w - 4) / (n - 1) : 0;
   int prevX = 0, prevY = 0;
+  bool joined = false;  // The previous point was drawn: join this one to it
   for (int i = 0; i < n; i++) {
+    if (isnan(data[i])) {
+      joined = false;
+      continue;
+    }
     int px = x + w - 2 - static_cast<int>((n - 1 - i) * step + 0.5f);
     int py = y + h - 4 - static_cast<int>((data[i] - lo) / (hi - lo) * (h - 8));
-    if (i > 0) {
+    if (joined) {
       g.drawLine(prevX, prevY, px, py);
       g.drawLine(prevX, prevY + 1, px, py + 1);
     } else {
@@ -151,6 +187,7 @@ void drawSparkline(U8G2 &g, int x, int y, int w, int h, const float *data, int n
     }
     prevX = px;
     prevY = py;
+    joined = true;
   }
 }
 
@@ -231,19 +268,21 @@ void drawCard(U8G2 &g, int x, int y, int w, int h, Metric metric, const Dashboar
   // Min / max and time span
   g.setFont(u8g2_font_6x10_tf);
   const int footY = y + h - 7;
-  if (histCount == 0) {
-    g.drawUTF8(x + 10, footY, valid ? "measuring..." : "SHTC3 not detected");
+  float lo = 0, hi = 0;
+  const bool any = histCount > 0 && range(hist, histCount, lo, hi);
+  if (!any && !valid) {
+    g.drawUTF8(x + 10, footY, s.sensorPresent ? "measuring..." : "SHTC3 not detected");
     return;
   }
-
-  float lo = hist[0], hi = hist[0];
-  for (int i = 1; i < histCount; i++) {
-    lo = min(lo, hist[i]);
-    hi = max(hi, hist[i]);
-  }
-  if (valid) {
+  if (!any) {
+    lo = hi = value;
+  } else if (valid) {
     lo = min(lo, value);
     hi = max(hi, value);
+  }
+  if (histCount == 0) {
+    g.drawUTF8(x + 10, footY, "measuring...");
+    return;
   }
   if (isTemp) snprintf(text, sizeof(text), "min %.1f°  max %.1f°", lo, hi);
   else        snprintf(text, sizeof(text), "min %.0f%%  max %.0f%%", lo, hi);

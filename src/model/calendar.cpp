@@ -18,9 +18,11 @@ int Calendar::update(const char *body, time_t receivedAt)
   char *fields[MAX_FIELDS];
 
   if (!body || !nextLine(body, line, sizeof(line))) return -1;
-  if (splitFields(line, fields, MAX_FIELDS) < 1 || strcmp(fields[0], "v1") != 0) return -1;
+  PushHeader header;
+  if (!parseHeader(line, header)) return -1;
 
-  CalendarEvent parsed[CALENDAR_MAX_EVENTS];
+  // Static: too big for the stack of the web server's handler on top of everything else
+  static CalendarEvent parsed[CALENDAR_MAX_EVENTS];
   int count = 0;
   int dropped = 0;
   while (nextLine(body, line, sizeof(line))) {
@@ -34,6 +36,7 @@ int Calendar::update(const char *body, time_t receivedAt)
     if (n < 3) return -1;
 
     CalendarEvent &e = parsed[count];
+    e = CalendarEvent();  // Reused buffer: no alert flags left from an earlier push
     e.id = strtoul(fields[0], nullptr, 10);
     e.start = static_cast<time_t>(strtoll(fields[1], nullptr, 10));
     e.end = static_cast<time_t>(strtoll(fields[2], nullptr, 10));
@@ -65,6 +68,7 @@ int Calendar::update(const char *body, time_t receivedAt)
   _count = count;
   _dropped = dropped;
   _lastUpdate = receivedAt;
+  strcpy(_hash, header.hash);
   return count;
 }
 

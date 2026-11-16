@@ -66,6 +66,22 @@ constexpr uint8_t I2C_ADDR_PCF85063 = 0x51;  // Real-time clock
 constexpr uint8_t I2C_ADDR_ES8311   = 0x18;  // Audio codec (speaker)
 
 // ============================================================
+//                        POWER SAVING
+// ============================================================
+// true  (default): built to run on battery. The CPU light-sleeps between minutes and
+//       WiFi is only on during short windows (WIFI_WINDOW_* below) within the
+//       active hours; the PC pushes the calendar and tasks inside those windows.
+// false: for a board that is always on USB. WiFi stays connected 24/7 (reconnecting
+//       if it drops), the board never sleeps, the clock shows the seconds and the
+//       screen is redrawn every second, the PC checks every minute at any hour
+//       and pushes only what changed, the header shows no battery level and there
+//       is no "No update from the PC" warning. The WIFI_WINDOW_* and WIFI_ACTIVE_*
+//       settings are ignored.
+// Must match power_saving in the [esp32] section of pc/config.ini (then run
+// pc/install_tasks.ps1 again so the calendar task is scheduled every minute).
+constexpr bool POWER_SAVING = false;
+
+// ============================================================
 //                       NETWORK & TIME
 // ============================================================
 constexpr const char *NTP_SERVER_PRIMARY   = "pool.ntp.org";
@@ -118,6 +134,9 @@ constexpr float TEMP_OFFSET_C = -2.0f;
 constexpr int      HISTORY_SIZE = 88;
 constexpr int      HISTORY_LEVELS = 3;
 constexpr uint32_t HISTORY_LEVELS_MIN[HISTORY_LEVELS] = {1, 5, 15};
+// The history is saved in flash this often (and restored after a restart, with a gap
+// for the time the board was off): 96 small writes a day, nothing for the flash.
+constexpr uint32_t HISTORY_SAVE_EVERY_MIN = 15;
 
 // ============================================================
 //                          BATTERY
@@ -149,12 +168,21 @@ constexpr int      CALENDAR_MAX_EVENTS       = 16;  // Kept in RAM
 constexpr int      CALENDAR_VISIBLE_EVENTS   = 5;   // Current event + upcoming ones
 constexpr uint32_t CALENDAR_ALERT_EARLY_MIN  = 5;   // First beep, minutes before start
 constexpr uint32_t CALENDAR_ALERT_LATE_SEC   = 60;  // Start alerts missed by more than this stay silent
-constexpr uint32_t CALENDAR_STALE_MIN        = 35;  // Warn when the PC hasn't pushed for this long
-                                                     // (two missed 15 min windows)
+// Warn when the PC hasn't pushed for this long (two missed 15 min windows). Only with
+// POWER_SAVING: without it the PC pushes only on changes, so silence is normal.
+constexpr uint32_t CALENDAR_STALE_MIN        = 35;
 
 // Tasks
-constexpr int      TASKS_MAX_ITEMS = 20;  // Kept in RAM
-constexpr uint32_t TASKS_STALE_MIN = 35;  // Warn when the PC hasn't pushed for this long
+constexpr int      TASKS_MAX_ITEMS = 20;  // Kept in RAM (pc/rlcd/board.py must use the same)
+constexpr uint32_t TASKS_STALE_MIN = 35;  // Same as CALENDAR_STALE_MIN
+
+// Without POWER_SAVING the PC programs check in every minute (GET /status): after this
+// long without hearing from one, its screen shows "PC offline since HH:MM".
+constexpr uint32_t PC_OFFLINE_MIN = 3;
+
+// While the clock has never been synced, the time the PC sends with each push sets it
+// when the RTC lost power, or when it is this far off.
+constexpr uint32_t PC_TIME_MAX_SKEW_SEC = 120;
 
 // Beeps
 constexpr uint32_t AUDIO_SAMPLE_RATE = 16000;
@@ -171,9 +199,10 @@ constexpr uint32_t BUTTON_LONG_PRESS_MS = 1000;
 // ============================================================
 //                            POWER
 // ============================================================
-// The screen refreshes once per minute (or on a KEY press), the CPU
-// light-sleeps in between (the reflective LCD keeps the image) and Bluetooth
-// is never started. USB serial output is interrupted while the board sleeps.
+// With POWER_SAVING the screen refreshes once per minute (or on a KEY press), the CPU
+// light-sleeps in between (the reflective LCD keeps the image, only with
+// POWER_SAVING) and Bluetooth is never started. USB serial output is interrupted
+// while the board sleeps.
 constexpr uint32_t CPU_FREQ_MHZ = 80;
 
 // Wake up slightly after the minute rolls over, so the RTC already shows it.
@@ -184,3 +213,8 @@ constexpr uint32_t SLEEP_WAKE_MARGIN_MS = 200;
 // ============================================================
 // Pace of the loop while awake (WiFi window open, beep playing, KEY held).
 constexpr uint32_t LOOP_DELAY_MS = 20;
+
+// Without POWER_SAVING: how often the WiFi link is checked, and how long a drop is left
+// to the WiFi driver's own reconnection before a full reconnect.
+constexpr uint32_t WIFI_LINK_CHECK_MS = 5000;
+constexpr uint32_t WIFI_RECONNECT_AFTER_MS = 20000;
