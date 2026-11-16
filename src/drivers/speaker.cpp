@@ -130,6 +130,7 @@ bool Speaker::begin(uint32_t sampleRate, uint32_t toneHz, int volumePct)
 void Speaker::beep(BeepPattern pattern)
 {
   if (!_present) return;
+  _queued = true;   // Before _playing: see taskMain
   _playing = true;  // Already busy for the caller, before the task wakes up (it may go to sleep)
   _stopRequested = true;  // Ends the current pattern; the task then picks up the new one
   xTaskNotify(_task, static_cast<uint32_t>(pattern), eSetValueWithOverwrite);
@@ -180,7 +181,6 @@ void Speaker::play(BeepPattern pattern)
   if (!i2s.begin(I2S_MODE_STD, _sampleRate, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO) || !initCodec()) {
     Serial.println("[audio] Could not start I2S/codec");
     i2s.end();
-    _playing = false;
     return;
   }
   digitalWrite(_pins.pa, HIGH);
@@ -193,7 +193,6 @@ void Speaker::play(BeepPattern pattern)
   digitalWrite(_pins.pa, LOW);
   powerDown();  // Codec fully off before MCLK stops
   i2s.end();
-  _playing = false;
 }
 
 void Speaker::taskMain(void *arg)
@@ -202,7 +201,13 @@ void Speaker::taskMain(void *arg)
   for (;;) {
     uint32_t pattern = 0;
     xTaskNotifyWait(0, UINT32_MAX, &pattern, portMAX_DELAY);
+    self->_queued = false;
     self->_stopRequested = false;
     self->play(static_cast<BeepPattern>(pattern));
+    // Idle, unless another beep was asked for meanwhile (its notification is waiting): the
+    // sketch must not light-sleep between the two. beep() sets _queued before _playing, so
+    // whichever order the two run in, a queued beep leaves _playing true.
+    self->_playing = false;
+    if (self->_queued) self->_playing = true;
   }
 }

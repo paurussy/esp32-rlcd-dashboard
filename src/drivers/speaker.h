@@ -53,6 +53,7 @@ private:
   bool _present = false;
   std::atomic<bool> _playing{false};         // Shared with the playback task
   std::atomic<bool> _stopRequested{false};
+  std::atomic<bool> _queued{false};           // beep() called, the task has not picked it up yet
   TaskHandle_t _task = nullptr;
 
   bool writeReg(uint8_t reg, uint8_t value);
