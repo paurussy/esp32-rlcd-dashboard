@@ -26,6 +26,13 @@ bool waitConnected(uint32_t timeoutMs, IdleHook idle)
   return wifiConnected();
 }
 
+// With POWER_SAVING the radio sleeps between beacons while waiting for the PC; without
+// it the radio stays awake, so pushes and mDNS answers are not delayed.
+void applyRadioSleep()
+{
+  WiFi.setSleep(POWER_SAVING ? WIFI_PS_MAX_MODEM : WIFI_PS_NONE);
+}
+
 }  // namespace
 
 bool wifiConfigured()
@@ -38,13 +45,13 @@ bool wifiConnect(uint32_t timeoutMs, IdleHook idle)
   if (!wifiConfigured()) return false;
 
   WiFi.persistent(false);  // No flash write on every connection
-  WiFi.setAutoReconnect(false);
+  WiFi.setAutoReconnect(!POWER_SAVING);  // Always-on mode: recover from drops by itself
   WiFi.mode(WIFI_STA);
 
   if (g_knownAp.valid) {
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD, g_knownAp.channel, g_knownAp.bssid);
     if (waitConnected(timeoutMs / 2, idle)) {
-      WiFi.setSleep(WIFI_PS_MAX_MODEM);  // Radio sleeps between beacons while waiting for the PC
+      applyRadioSleep();
       return true;
     }
     WiFi.disconnect();
@@ -57,7 +64,7 @@ bool wifiConnect(uint32_t timeoutMs, IdleHook idle)
   g_knownAp.channel = WiFi.channel();
   memcpy(g_knownAp.bssid, WiFi.BSSID(), sizeof(g_knownAp.bssid));
   g_knownAp.valid = true;
-  WiFi.setSleep(WIFI_PS_MAX_MODEM);
+  applyRadioSleep();
   return true;
 }
 

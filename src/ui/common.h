@@ -32,6 +32,10 @@ void drawFooterText(U8G2 &g, const char *left, const char *right);
 // "HH:MM" of a Unix time, in the local time zone.
 void formatHM(time_t t, char *out, size_t size);
 
+// Title clock of the calendar and tasks screens, on the right (ending at SCREEN_W - 10):
+// HH:MM, or HH:MM:SS when `seconds`.
+void drawTitleClock(U8G2 &g, time_t now, bool seconds, int baseY);
+
 // Draws `text`, cut at a UTF-8 character boundary and ended with "..." if wider than maxW.
 void drawUTF8Fit(U8G2 &g, int x, int y, int maxW, const char *text);
 

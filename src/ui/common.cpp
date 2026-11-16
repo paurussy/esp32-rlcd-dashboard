@@ -79,7 +79,7 @@ void drawPageDots(U8G2 &g, int centerX, int centerY, int page, int count)
 
 }  // namespace
 
-// Layout: [wifi, only when connected] [muted, only when muted]   [page dots]   [% + battery]
+// Layout: [wifi, only when connected] [muted, only when muted]   [page dots]   [% + battery, if shown]
 void drawHeader(U8G2 &g, const DashboardState &s)
 {
   g.setDrawColor(1);
@@ -89,15 +89,17 @@ void drawHeader(U8G2 &g, const DashboardState &s)
   if (s.wifiConnected) drawWifiIcon(g, 8, 5, wifiBars(s));
   if (s.alertsMuted) drawMutedIcon(g, s.wifiConnected ? 34 : 8, 5);
 
-  g.setFont(u8g2_font_helvB12_tf);
-  char label[8];
-  if (s.batteryPresent) snprintf(label, sizeof(label), "%d%%", s.batteryPercent);
-  else                  strcpy(label, "USB");
+  if (s.showBattery) {
+    g.setFont(u8g2_font_helvB12_tf);
+    char label[8];
+    if (s.batteryPresent) snprintf(label, sizeof(label), "%d%%", s.batteryPercent);
+    else                  strcpy(label, "USB");
 
-  int iconX = SCREEN_W - 8 - 30;
-  drawBatteryIcon(g, iconX, 5, s.batteryPresent ? s.batteryPercent : 0,
-                  s.batteryCharging || !s.batteryPresent);
-  g.drawUTF8(iconX - 5 - g.getUTF8Width(label), 18, label);
+    int iconX = SCREEN_W - 8 - 30;
+    drawBatteryIcon(g, iconX, 5, s.batteryPresent ? s.batteryPercent : 0,
+                    s.batteryCharging || !s.batteryPresent);
+    g.drawUTF8(iconX - 5 - g.getUTF8Width(label), 18, label);
+  }
 
   drawPageDots(g, SCREEN_W / 2, HEADER_H / 2, s.page, s.pageCount);
 
@@ -118,6 +120,19 @@ void formatHM(time_t t, char *out, size_t size)
   struct tm lt;
   localtime_r(&t, &lt);
   snprintf(out, size, "%02d:%02d", lt.tm_hour, lt.tm_min);
+}
+
+void drawTitleClock(U8G2 &g, time_t now, bool seconds, int baseY)
+{
+  struct tm lt;
+  localtime_r(&now, &lt);
+  char clock[12];
+  if (seconds) snprintf(clock, sizeof(clock), "%02d:%02d:%02d", lt.tm_hour, lt.tm_min, lt.tm_sec);
+  else         snprintf(clock, sizeof(clock), "%02d:%02d", lt.tm_hour, lt.tm_min);
+
+  // Helvetica digits all have the same width, so the clock does not shift as it changes
+  g.setFont(u8g2_font_helvB14_tf);
+  g.drawUTF8(SCREEN_W - 10 - g.getUTF8Width(clock), baseY, clock);
 }
 
 // Draws `text`, cut at a UTF-8 character boundary and ended with "..." if wider than maxW.

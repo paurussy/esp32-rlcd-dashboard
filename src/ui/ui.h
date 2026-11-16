@@ -28,7 +28,9 @@ struct DashboardState {
   bool timeSynced = false;      // Set from NTP at least once
   bool rtcTimeInvalid = false;  // RTC lost power and was never re-synced
   time_t lastNtpSync = 0;       // Unix time of the last NTP sync, 0 if none
+  bool clockFromPc = false;     // Not synced yet, but set from the time the PC sent
   DateTime now;
+  bool showSeconds = false;     // Screen redrawn every second (POWER_SAVING off)
 
   // Environment
   bool sensorPresent = false;
@@ -40,7 +42,8 @@ struct DashboardState {
   // Meeting beeps silenced (icon in the header)
   bool alertsMuted = false;
 
-  // Power
+  // Power (battery level hidden when POWER_SAVING is off: the board lives on USB)
+  bool showBattery = true;
   bool batteryPresent = false;
   bool batteryCharging = false;
   int batteryPercent = 0;
@@ -59,6 +62,8 @@ struct CalendarView {
   bool hasData = false;             // Received at least one push from the PC
   time_t lastUpdate = 0;
   bool stale = false;               // No push for CALENDAR_STALE_MIN minutes
+  bool pcOffline = false;           // POWER_SAVING off: no sign of the PC for PC_OFFLINE_MIN
+  time_t lastContact = 0;           // Last sign of the PC
 };
 
 struct TasksView {
@@ -68,6 +73,8 @@ struct TasksView {
   bool hasData = false;             // Received at least one push from the PC
   time_t lastUpdate = 0;
   bool stale = false;               // No push for TASKS_STALE_MIN minutes
+  bool pcOffline = false;           // POWER_SAVING off: no sign of the PC for PC_OFFLINE_MIN
+  time_t lastContact = 0;           // Last sign of the PC
 };
 
 void uiDrawSplash(U8G2 &g, const char *message);

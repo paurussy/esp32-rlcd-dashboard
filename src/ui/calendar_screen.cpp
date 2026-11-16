@@ -29,8 +29,8 @@ bool isCurrent(const CalendarEvent &e, time_t now)
   return e.start <= now && now < e.end;
 }
 
-// Date on the left, HH:MM on the right.
-void drawCalendarTitle(U8G2 &g, const CalendarView &c)
+// Date on the left, HH:MM (and the seconds, if shown) on the right.
+void drawCalendarTitle(U8G2 &g, const DashboardState &s, const CalendarView &c)
 {
   struct tm lt;
   localtime_r(&c.now, &lt);
@@ -40,10 +40,7 @@ void drawCalendarTitle(U8G2 &g, const CalendarView &c)
   g.setFont(u8g2_font_helvB12_tf);
   g.drawUTF8(10, 47, date);
 
-  char clock[8];
-  formatHM(c.now, clock, sizeof(clock));
-  g.setFont(u8g2_font_helvB14_tf);
-  g.drawUTF8(SCREEN_W - 10 - g.getUTF8Width(clock), 48, clock);
+  drawTitleClock(g, c.now, s.showSeconds, 48);
 }
 
 // The event happening now (inverted card with progress) or the next one (framed card).
@@ -116,8 +113,12 @@ void drawCalendarFooter(U8G2 &g, const DashboardState &s, const CalendarView &c)
 {
   char left[48], hm[8];
   formatHM(c.lastUpdate, hm, sizeof(hm));
-  if (!c.hasData)    strcpy(left, "Waiting for the PC calendar bridge");
-  else if (c.stale)  snprintf(left, sizeof(left), "No update from the PC since %s", hm);
+  if (!c.hasData)        strcpy(left, "Waiting for the PC calendar bridge");
+  else if (c.pcOffline) {
+    formatHM(c.lastContact, hm, sizeof(hm));
+    snprintf(left, sizeof(left), "PC offline since %s", hm);
+  }
+  else if (c.stale)      snprintf(left, sizeof(left), "No update from the PC since %s", hm);
   else               snprintf(left, sizeof(left), "Synced %s", hm);
   drawFooterText(g, left, s.alertsMuted ? "KEY: screen  BOOT: unmute" : "KEY: screen  BOOT: mute");
 }
@@ -128,7 +129,7 @@ void uiDrawCalendar(U8G2 &g, const DashboardState &s, const CalendarView &c)
 {
   g.clearBuffer();
   drawHeader(g, s);
-  drawCalendarTitle(g, c);
+  drawCalendarTitle(g, s, c);
 
   if (c.count == 0) {
     if (c.hasData) drawMessage(g, 160, "No more meetings today", nullptr);

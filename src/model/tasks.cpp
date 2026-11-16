@@ -18,9 +18,11 @@ int TaskList::update(const char *body, time_t receivedAt)
   char *fields[MAX_FIELDS];
 
   if (!body || !nextLine(body, line, sizeof(line))) return -1;
-  if (splitFields(line, fields, MAX_FIELDS) < 1 || strcmp(fields[0], "v1") != 0) return -1;
+  PushHeader header;
+  if (!parseHeader(line, header)) return -1;
 
-  Task parsed[TASKS_MAX_ITEMS];
+  // Static: too big for the stack of the web server's handler on top of everything else
+  static Task parsed[TASKS_MAX_ITEMS];
   int count = 0;
   int pushed = 0;
   int dropped = 0;
@@ -45,6 +47,8 @@ int TaskList::update(const char *body, time_t receivedAt)
   for (int i = 0; i < count; i++) _tasks[i] = parsed[i];
   _count = count;
   _dropped = dropped;
+  _total = header.extra > pushed ? static_cast<int>(header.extra) : pushed;
   _lastUpdate = receivedAt;
+  strcpy(_hash, header.hash);
   return pushed;
 }

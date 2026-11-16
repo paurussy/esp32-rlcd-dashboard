@@ -6,7 +6,8 @@ Desk clock and indoor climate dashboard for the
 
 - Large clock from the on-board PCF85063 RTC, re-synced via NTP every hour
 - Low power by design: one screen refresh per minute, CPU light sleep, no
-  Bluetooth, WiFi on only in short windows (see [Power](#power))
+  Bluetooth, WiFi on only in short windows (see [Power](#power)); for a board
+  always on USB, power saving can be turned off (WiFi 24/7, PC pushes every minute)
 - Full date line
 - Temperature and humidity (SHTC3) with comfort labels, min/max and a chart that always fills its width (1 min per point at first, then 5 min, up to 15 min per point for ~22 h)
 - Header with WiFi signal strength (only while connected), page dots and
@@ -111,8 +112,7 @@ esp32-rlcd-dashboard/
 Or with `arduino-cli`:
 
 ```sh
-arduino-cli compile --upload -p <PORT> \
-  --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,CDCOnBoot=cdc" .
+arduino-cli compile --upload -p <PORT> --fqbn "esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,CDCOnBoot=cdc" .
 ```
 
 ## Teams calendar
@@ -175,7 +175,7 @@ only special while the chip resets: held during a reset it enters download mode
 
 ## Power
 
-There is a single, efficient mode (no switch to turn it on):
+Power saving is on by default (`POWER_SAVING = true` in `config.h`):
 
 - **Screen**: redrawn once per minute, right after the minute changes (no
   seconds on the clock), and immediately when KEY is pressed.
@@ -204,6 +204,25 @@ There is a single, efficient mode (no switch to turn it on):
 
 USB serial output is interrupted while the board sleeps, and so is the USB
 upload port (see Troubleshooting).
+
+### Turning power saving off
+
+For a board that is always plugged into USB:
+
+1. Set `POWER_SAVING = false` in `config.h` and flash the board.
+2. Set `power_saving = false` in the `[esp32]` section of `pc/config.ini`.
+3. Run `pc/install_tasks.ps1` again (the calendar task then runs every minute)
+   and restart the tasks server.
+
+Then the board never sleeps, keeps WiFi connected 24/7 (reconnecting if it
+drops, re-syncing the clock every hour), the PC checks the calendar and tasks
+every minute at any hour and pushes them only when they changed, the header
+shows no battery level and there is no "No update from the PC" warning (pushes
+are no longer regular). The `WIFI_WINDOW_*` and `WIFI_ACTIVE_*` settings are
+ignored. The board keeps the calendar and tasks in RAM: when you sign in to the
+PC, it pushes everything in full (retrying every minute until the board answers);
+after a restart of the board alone they come back with the next change, or sooner
+with `resend_every_min` in `pc/config.ini`.
 
 ## Troubleshooting
 

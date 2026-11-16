@@ -14,20 +14,17 @@ constexpr int TASK_ROWS = 6;
 constexpr int TASK_ROW_H = 32;
 constexpr int TASK_LIST_TOP = 58;
 
-// "Tasks · 4 pending" on the left, HH:MM on the right.
-void drawTasksTitle(U8G2 &g, const TasksView &t)
+// "Tasks · 4 pending" on the left, HH:MM (and the seconds, if shown) on the right.
+void drawTasksTitle(U8G2 &g, const DashboardState &s, const TasksView &t)
 {
   char title[40];
-  const int pending = t.list->count();
+  const int pending = max(t.list->total(), t.list->count());  // The PC may have more than fit
   if (pending > 0) snprintf(title, sizeof(title), "Tasks  \xC2\xB7  %d pending", pending);
   else             strcpy(title, "Tasks");
   g.setFont(u8g2_font_helvB12_tf);
   g.drawUTF8(10, 47, title);
 
-  char clock[8];
-  formatHM(t.now, clock, sizeof(clock));
-  g.setFont(u8g2_font_helvB14_tf);
-  g.drawUTF8(SCREEN_W - 10 - g.getUTF8Width(clock), 48, clock);
+  drawTitleClock(g, t.now, s.showSeconds, 48);
 }
 
 // One-line row: a bar for high priority and the text. The selected row is inverted.
@@ -46,14 +43,16 @@ void drawTaskRow(U8G2 &g, const Task &task, int y, bool selected)
   g.setDrawColor(1);
 }
 
-// Tasks scrolled out of view above and below the list.
-void drawTasksOverflow(U8G2 &g, int above, int below)
+// Tasks scrolled out of view above and below the list, and the ones only on the PC.
+void drawTasksOverflow(U8G2 &g, int above, int below, int onPc)
 {
-  if (above == 0 && below == 0) return;
-  char text[48];
-  if (above > 0 && below > 0) snprintf(text, sizeof(text), "%d more above, %d more below", above, below);
-  else if (above > 0)         snprintf(text, sizeof(text), "%d more above", above);
-  else                        snprintf(text, sizeof(text), "%d more below", below);
+  if (above == 0 && below == 0 && onPc == 0) return;
+  char text[72], extra[32] = "";
+  if (onPc > 0) snprintf(extra, sizeof(extra), "%s%d only on the PC", above || below ? ", " : "", onPc);
+  if (above > 0 && below > 0) snprintf(text, sizeof(text), "%d above, %d below%s", above, below, extra);
+  else if (above > 0)         snprintf(text, sizeof(text), "%d more above%s", above, extra);
+  else if (below > 0)         snprintf(text, sizeof(text), "%d more below%s", below, extra);
+  else                        snprintf(text, sizeof(text), "%s", extra);
   g.setFont(u8g2_font_6x13_tf);
   g.drawUTF8((SCREEN_W - g.getUTF8Width(text)) / 2, 270, text);
 }
@@ -62,8 +61,12 @@ void drawTasksFooter(U8G2 &g, const TasksView &t)
 {
   char left[48], hm[8];
   formatHM(t.lastUpdate, hm, sizeof(hm));
-  if (!t.hasData)    strcpy(left, "Waiting for the PC task page");
-  else if (t.stale)  snprintf(left, sizeof(left), "No update from the PC since %s", hm);
+  if (!t.hasData)        strcpy(left, "Waiting for the PC task page");
+  else if (t.pcOffline) {
+    formatHM(t.lastContact, hm, sizeof(hm));
+    snprintf(left, sizeof(left), "PC offline since %s", hm);
+  }
+  else if (t.stale)      snprintf(left, sizeof(left), "No update from the PC since %s", hm);
   else               snprintf(left, sizeof(left), "Synced %s", hm);
   drawFooterText(g, left, t.list->count() > 0 ? "BOOT: next" : "KEY: screen");
 }
@@ -74,7 +77,7 @@ void uiDrawTasks(U8G2 &g, const DashboardState &s, const TasksView &t)
 {
   g.clearBuffer();
   drawHeader(g, s);
-  drawTasksTitle(g, t);
+  drawTasksTitle(g, s, t);
 
   const int count = t.list->count();
   if (count == 0) {
@@ -87,7 +90,7 @@ void uiDrawTasks(U8G2 &g, const DashboardState &s, const TasksView &t)
     for (int i = 0; i < shown; i++) {
       drawTaskRow(g, t.list->at(first + i), TASK_LIST_TOP + i * TASK_ROW_H, first + i == selected);
     }
-    drawTasksOverflow(g, first, count - first - shown);
+    drawTasksOverflow(g, first, count - first - shown, max(t.list->total() - count, 0));
   }
 
   drawTasksFooter(g, t);
